@@ -1,0 +1,1061 @@
+import { useState, useCallback, useEffect, useRef } from "react";
+import {
+  BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid,
+  Tooltip, Legend, ResponsiveContainer, ReferenceLine,
+  RadarChart, Radar, PolarGrid, PolarAngleAxis, PolarRadiusAxis,
+} from "recharts";
+ 
+// ══════════════════════════════════════════════════════════════
+//  COLOR SYSTEM
+// ══════════════════════════════════════════════════════════════
+const BG='#060f1e',SF='#0b1829',CD='#101f33',CB='rgba(56,139,220,0.12)';
+const CY='#38bdf8',AM='#fbbf24',RD='#f87171',GR='#34d399',PU='#a78bfa';
+const TX='#e2e8f0',MT='#64748b',OR='#fb923c';
+const RISK={
+  HIGH:{color:'#f87171',bg:'rgba(248,113,113,0.1)',bd:'rgba(248,113,113,0.3)'},
+  MED: {color:'#fbbf24',bg:'rgba(251,191,36,0.1)', bd:'rgba(251,191,36,0.3)'},
+  LOW: {color:'#34d399',bg:'rgba(52,211,153,0.1)', bd:'rgba(52,211,153,0.3)'},
+};
+ 
+// ══════════════════════════════════════════════════════════════
+//  AUTH — USERS & ROLES
+// ══════════════════════════════════════════════════════════════
+const ROLES = {
+  일반직원:   { label:'일반직원',   color:CY,  icon:'ti-user',         badge:'rgba(56,189,248,0.15)' },
+  안전관리자: { label:'안전관리자', color:OR,  icon:'ti-shield-check', badge:'rgba(251,146,60,0.15)' },
+  경영진:     { label:'경영진',     color:PU,  icon:'ti-crown',        badge:'rgba(167,139,250,0.15)' },
+};
+ 
+const DEMO_USERS = [
+  { id:'u1', name:'김현장',  dept:'운항', role:'일반직원',   pw:'1234',  avatar:'✈️' },
+  { id:'u2', name:'이정비',  dept:'정비', role:'일반직원',   pw:'1234',  avatar:'🔧' },
+  { id:'u3', name:'박일반',  dept:'일반', role:'일반직원',   pw:'1234',  avatar:'👤' },
+  { id:'u4', name:'최안전',  dept:'전체', role:'안전관리자', pw:'admin', avatar:'🛡️' },
+  { id:'u5', name:'정팀장',  dept:'전체', role:'안전관리자', pw:'admin', avatar:'📋' },
+  { id:'u6', name:'강대표',  dept:'전체', role:'경영진',     pw:'boss',  avatar:'👔' },
+];
+ 
+// 역할별 접근 가능 메뉴
+const ROLE_NAVS = {
+  일반직원:   ['dash','rep','vol','nom','myrep'],
+  안전관리자: ['dash','ai','spi','kpi','rep','vol','nom','reg','hist'],
+  경영진:     ['dash','kpi','reg'],
+};
+ 
+// 역할별 권한
+const CAN = (user, perm) => {
+  const perms = {
+    viewAll:    ['안전관리자','경영진'],
+    approve:    ['안전관리자'],
+    viewKPI:    ['안전관리자','경영진'],
+    viewSPI:    ['안전관리자','경영진'],
+    aiAnalysis: ['안전관리자'],
+    manageRec:  ['안전관리자'],
+    viewHist:   ['안전관리자'],
+  };
+  return (perms[perm]||[]).includes(user?.role);
+};
+ 
+// ══════════════════════════════════════════════════════════════
+//  APPROVAL WORKFLOW
+// ══════════════════════════════════════════════════════════════
+const WF_STATUS = {
+  접수됨:         { color:CY,  bg:'rgba(56,189,248,0.1)', bd:'rgba(56,189,248,0.3)', icon:'ti-circle-plus',   next:['검토중'] },
+  검토중:         { color:AM,  bg:'rgba(251,191,36,0.1)', bd:'rgba(251,191,36,0.3)', icon:'ti-eye',           next:['부서장승인대기','조치중','반려'] },
+  부서장승인대기: { color:OR,  bg:'rgba(251,146,60,0.1)', bd:'rgba(251,146,60,0.3)', icon:'ti-clock',         next:['승인완료','반려'] },
+  승인완료:       { color:GR,  bg:'rgba(52,211,153,0.1)', bd:'rgba(52,211,153,0.3)', icon:'ti-circle-check',  next:['조치중'] },
+  조치중:         { color:PU,  bg:'rgba(167,139,250,0.1)',bd:'rgba(167,139,250,0.3)',icon:'ti-settings',      next:['완료'] },
+  반려:           { color:RD,  bg:'rgba(248,113,113,0.1)',bd:'rgba(248,113,113,0.3)',icon:'ti-circle-x',      next:['검토중'] },
+  완료:           { color:MT,  bg:'rgba(100,116,139,0.1)',bd:'rgba(100,116,139,0.3)',icon:'ti-check',         next:[] },
+};
+const WF_ACTIONS = [
+  { from:'접수됨',         to:'검토중',         label:'검토 시작',     color:AM, icon:'ti-eye' },
+  { from:'검토중',         to:'부서장승인대기', label:'부서장 승인 요청', color:OR, icon:'ti-send' },
+  { from:'검토중',         to:'조치중',         label:'직접 조치',     color:PU, icon:'ti-settings' },
+  { from:'검토중',         to:'반려',           label:'반려',          color:RD, icon:'ti-x' },
+  { from:'부서장승인대기', to:'승인완료',        label:'승인',          color:GR, icon:'ti-check' },
+  { from:'부서장승인대기', to:'반려',           label:'반려',          color:RD, icon:'ti-x' },
+  { from:'승인완료',       to:'조치중',         label:'조치 시작',     color:PU, icon:'ti-settings' },
+  { from:'조치중',         to:'완료',           label:'조치 완료',     color:GR, icon:'ti-circle-check' },
+  { from:'반려',           to:'검토중',         label:'재검토',        color:AM, icon:'ti-refresh' },
+];
+ 
+// ══════════════════════════════════════════════════════════════
+//  CONSTANTS
+// ══════════════════════════════════════════════════════════════
+const DEPTS    = ["운항","정비","일반"];
+const DM = { 운항:{icon:"ti-helicopter",c:CY}, 정비:{icon:"ti-tool",c:OR}, 일반:{icon:"ti-building",c:PU} };
+const DEPT_COLORS = [CY,OR,PU];
+const MISSIONS = ["산불방제","농약살포","부정기 인원수송","지상작업","기타"];
+const VOL_CATS = ["안전개선 제안","위험요인 관찰","아차사고 경험","절차 개선 건의","안전 우수사례","기타"];
+ 
+const ALL_NAVS = [
+  {id:'dash',  icon:'ti-home-2',              lbl:'메인 대시보드'},
+  {id:'myrep', icon:'ti-my-location',         lbl:'내 보고 현황'},
+  {id:'ai',    icon:'ti-cpu',                 lbl:'AI 위험요인 분석'},
+  {id:'spi',   icon:'ti-chart-arrows-vertical',lbl:'SPI 모니터링'},
+  {id:'kpi',   icon:'ti-report-analytics',    lbl:'KPI 리포트'},
+  {id:'rep',   icon:'ti-clipboard-list',      lbl:'위험요인 보고'},
+  {id:'vol',   icon:'ti-hand-finger',         lbl:'자발적 안전보고'},
+  {id:'nom',   icon:'ti-award',               lbl:'모범직원 추천'},
+  {id:'reg',   icon:'ti-list-details',        lbl:'위험요인 현황'},
+  {id:'hist',  icon:'ti-database',            lbl:'보고 이력 저장소'},
+];
+ 
+// ══════════════════════════════════════════════════════════════
+//  SPI DATA
+// ══════════════════════════════════════════════════════════════
+const SPI_MONTHS = ['24.12','25.01','25.02','25.03','25.04','25.05'];
+const SPI_LIST_INIT = [
+  {id:'spi1',name:'아차사고 자발적 보고',unit:'건/월',category:'안전보고',dept:'전 부문',direction:'up',spt:4,alert:2,icon:'ti-bell',desc:'높을수록 보고 문화 양호',values:[3,5,4,6,3,2]},
+  {id:'spi2',name:'안전 교육 이수율',unit:'%',category:'교육훈련',dept:'전 부문',direction:'up',spt:95,alert:85,icon:'ti-certificate',desc:'95% 이상 유지',values:[96,95,97,94,91,83]},
+  {id:'spi3',name:'정비 지연 발생',unit:'건/월',category:'정비',dept:'정비',direction:'down',spt:2,alert:5,icon:'ti-tool',desc:'2건 이하 목표',values:[1,2,1,3,4,6]},
+  {id:'spi4',name:'FOD 발생',unit:'건/월',category:'지상안전',dept:'정비',direction:'down',spt:1,alert:3,icon:'ti-alert-triangle',desc:'1건 이하 목표',values:[1,0,1,2,1,2]},
+  {id:'spi5',name:'위험요인 조치완료율',unit:'%',category:'위험관리',dept:'일반',direction:'up',spt:80,alert:60,icon:'ti-shield-check',desc:'30일 내 조치 완료',values:[85,82,79,75,68,58]},
+  {id:'spi6',name:'비행 전 점검 누락률',unit:'%',category:'운항',dept:'운항',direction:'down',spt:0,alert:2,icon:'ti-clipboard-check',desc:'0% 유지',values:[0,0,0.5,0.5,1,2.5]},
+  {id:'spi7',name:'농약살포 안전 이탈',unit:'건/월',category:'임무안전',dept:'운항',direction:'down',spt:0,alert:2,icon:'ti-droplet',desc:'0건 목표',values:[0,0,0,1,0,1]},
+  {id:'spi8',name:'비행시간 한도 준수율',unit:'%',category:'피로관리',dept:'운항',direction:'up',spt:100,alert:95,icon:'ti-clock',desc:'100% 준수',values:[100,100,100,98,97,96]},
+];
+const getSpiStatus=(s,v)=>s.direction==='up'?(v<=s.alert?'ALERT':v<s.spt?'WARNING':'NORMAL'):(v>=s.alert?'ALERT':v>s.spt?'WARNING':'NORMAL');
+const SPI_STATUS={ALERT:{label:'이상',color:'#f87171',bg:'rgba(248,113,113,0.1)',bd:'rgba(248,113,113,0.3)',icon:'ti-alert-octagon'},WARNING:{label:'주의',color:'#fbbf24',bg:'rgba(251,191,36,0.1)',bd:'rgba(251,191,36,0.3)',icon:'ti-alert-triangle'},NORMAL:{label:'정상',color:'#34d399',bg:'rgba(52,211,153,0.1)',bd:'rgba(52,211,153,0.3)',icon:'ti-circle-check'}};
+const normSpi=s=>{const v=s.values[s.values.length-1];if(s.direction==='up')return Math.min(100,Math.round(v/s.spt*100));if(v<=s.spt)return 100;if(v>=s.alert)return 0;return Math.max(0,Math.round((1-(v-s.spt)/(s.alert-s.spt))*100));};
+const kpiGrade=sc=>sc>=90?{g:'A',c:GR,lbl:'우수'}:sc>=75?{g:'B',c:CY,lbl:'양호'}:sc>=60?{g:'C',c:AM,lbl:'보통'}:sc>=45?{g:'D',c:OR,lbl:'미흡'}:{g:'E',c:RD,lbl:'위험'};
+ 
+// ── Seed data ──
+let _id = 10;
+const mkHaz = (dept,type,level,title,status,date,mission,submittedBy,history=[]) => ({
+  id:++_id, dept, type, level, title, status, date, mission,
+  submittedBy: submittedBy||'김현장',
+  submittedByRole: '일반직원',
+  approvalHistory: history,
+});
+const SEED = [
+  {...mkHaz("운항","AI","HIGH","산불방제 구역 급변풍 위험 패턴 감지","검토중","2025-05-14","산불방제","김현장",[{action:'접수됨',by:'시스템',at:'2025-05-14 09:10',comment:'AI 자동 감지'}])},
+  {...mkHaz("운항","자발","MED","야간비행 헬기장 유도등 불량","부서장승인대기","2025-05-13","부정기 인원수송","김현장",[{action:'접수됨',by:'시스템',at:'2025-05-13 14:22',comment:''},{action:'검토중',by:'최안전',at:'2025-05-13 16:00',comment:'현장 확인 완료'},{action:'부서장승인대기',by:'최안전',at:'2025-05-13 16:45',comment:'부서장 검토 필요'}])},
+  {...mkHaz("정비","AI","HIGH","H145 메인로터 진동 이상 패턴 감지","조치중","2025-05-14","산불방제","이정비",[{action:'접수됨',by:'시스템',at:'2025-05-14 08:55',comment:''},{action:'검토중',by:'최안전',at:'2025-05-14 09:30',comment:''},{action:'승인완료',by:'최안전',at:'2025-05-14 10:00',comment:'긴급 조치 승인'},{action:'조치중',by:'이정비',at:'2025-05-14 10:15',comment:'정비팀 투입'}])},
+  {...mkHaz("정비","자발","LOW","공구 보관함 잠금장치 미흡","완료","2025-05-12","지상작업","이정비",[{action:'접수됨',by:'시스템',at:'2025-05-12 11:00',comment:''},{action:'완료',by:'최안전',at:'2025-05-12 15:00',comment:'잠금장치 교체 완료'}])},
+  {...mkHaz("일반","AI","HIGH","악기상 진입 비행계획 경로 충돌 감지","접수됨","2025-05-14","농약살포","시스템",[{action:'접수됨',by:'시스템',at:'2025-05-14 07:30',comment:'AI 자동 감지'}])},
+  {...mkHaz("정비","자발","MED","계류장 FOD 집중 탐지","검토중","2025-05-14","지상작업","이정비",[{action:'접수됨',by:'시스템',at:'2025-05-14 08:00',comment:''},{action:'검토중',by:'정팀장',at:'2025-05-14 09:00',comment:'현장 조사 착수'}])},
+  {...mkHaz("일반","자발","MED","농약 용기 적재 기준 미흡","접수됨","2025-05-13","농약살포","박일반",[{action:'접수됨',by:'시스템',at:'2025-05-13 13:00',comment:''}])},
+  {...mkHaz("일반","자발","MED","농약 잔류물 제거 절차 미준수","반려","2025-05-13","농약살포","박일반",[{action:'접수됨',by:'시스템',at:'2025-05-13 10:00',comment:''},{action:'반려',by:'최안전',at:'2025-05-13 14:00',comment:'기존 절차서에 명시된 사항. 재교육으로 대체'}])},
+  {...mkHaz("운항","자발","LOW","탑승 안전브리핑 절차 개선","완료","2025-05-11","부정기 인원수송","김현장",[{action:'접수됨',by:'시스템',at:'2025-05-11 09:00',comment:''},{action:'완료',by:'최안전',at:'2025-05-12 11:00',comment:'절차서 개정 완료'}])},
+  {...mkHaz("일반","자발","LOW","보안구역 출입 기록 누락","검토중","2025-05-14","기타","박일반",[{action:'접수됨',by:'시스템',at:'2025-05-14 13:00',comment:''},{action:'검토중',by:'최안전',at:'2025-05-14 14:00',comment:''}])},
+];
+const buildHistSeed=()=>[["2024-12","운항","HIGH"],["2024-12","운항","MED"],["2024-12","정비","HIGH"],["2024-12","정비","MED"],["2024-12","일반","LOW"],["2025-01","운항","MED"],["2025-01","정비","MED"],["2025-01","일반","LOW"],["2025-02","운항","HIGH"],["2025-02","정비","HIGH"],["2025-02","일반","MED"],["2025-03","운항","HIGH"],["2025-03","정비","HIGH"],["2025-03","일반","HIGH"],["2025-04","운항","HIGH"],["2025-04","정비","MED"],["2025-04","일반","LOW"],["2025-05","운항","HIGH"],["2025-05","정비","HIGH"],["2025-05","일반","MED"]].map((r,i)=>({id:1000+i,ym:r[0],dept:r[1],level:r[2],date:r[0]+"-15"}));
+const HIST_SEED=buildHistSeed();
+const MONTHS_12=["2024-06","2024-07","2024-08","2024-09","2024-10","2024-11","2024-12","2025-01","2025-02","2025-03","2025-04","2025-05"];
+const MONTHS_6=["2024-12","2025-01","2025-02","2025-03","2025-04","2025-05"];
+const ML=ym=>{const[y,m]=ym.split('-');return`${y.slice(2)}.${m}`;};
+const buildMonthlyRisk=rows=>MONTHS_12.map(ym=>{const r=rows.filter(h=>(h.ym||h.date?.slice(0,7))===ym);return{month:ML(ym),HIGH:r.filter(h=>h.level==='HIGH').length,MED:r.filter(h=>h.level==='MED').length,LOW:r.filter(h=>h.level==='LOW').length};});
+const buildDeptTrend=rows=>MONTHS_6.map(ym=>{const r=rows.filter(h=>(h.ym||h.date?.slice(0,7))===ym);const o={month:ML(ym)};DEPTS.forEach(d=>{o[d]=r.filter(h=>h.dept===d).length;});return o;});
+ 
+// AI prompts
+const SYS=`당신은 항공안전관리시스템(SMS) 전문 분석 AI입니다. Blue Air(헬기 운항사)의 위험요인을 ICAO Annex 19, Doc 9859 및 항공안전법 기준으로 분석합니다.\n반드시 순수 JSON만 응답:\n{"classification":"기술적|인적|조직적|환경적","likelihood":1~5,"severity":1~5,"riskLevel":"HIGH|MED|LOW","hfacs":"범주","immediateActions":["조치1","조치2","조치3"],"proactiveActions":["대응1","대응2","대응3"],"spi":["지표1","지표2"],"regulation":"조항","summary":"2~3문장"}`;
+const SPI_SYS=`당신은 SMS SPI 전문 분석 AI입니다. ICAO Doc 9859 4판 기준으로 SPI 이상을 심층 분석합니다.\n반드시 순수 JSON만 응답:\n{"severity":"HIGH|MED|LOW","trend":"악화|개선|변동","rootCauses":["원인1","원인2","원인3"],"contributingFactors":["기여1","기여2"],"immediateActions":["즉각1","즉각2","즉각3"],"correctiveActions":["시정1","시정2","시정3"],"preventiveActions":["예방1","예방2"],"timeline":"기간","regulation":"법규","summary":"3문장"}`;
+const KPI_SYS=`당신은 SMS 월간 KPI 분석 전문가입니다. ICAO Doc 9859 4판 기반으로 월간 보고서를 작성합니다.\n반드시 순수 JSON만 응답:\n{"overall_score":0~100,"grade":"A|B|C|D|E","executive_summary":"3문장","dept_analysis":[{"dept":"부문","score":0~100,"highlights":["핵심1","핵심2"],"risk_note":"한 문장"}],"spi_review":[{"name":"SPI","status":"ALERT|WARNING|NORMAL","value":"값","analysis":"한 문장"}],"top_risks":["위험1","위험2","위험3"],"recommendations":["권고1","권고2","권고3","권고4"],"next_month_focus":"2문장","icao_reference":"문서"}`;
+const KPI_MONTHS=["2025-05","2025-04","2025-03","2025-02","2025-01","2024-12"];
+const KPI_ML=ym=>{const[y,m]=ym.split('-');return`${y}년 ${parseInt(m)}월`;};
+ 
+// ══════════════════════════════════════════════════════════════
+//  STYLE HELPERS
+// ══════════════════════════════════════════════════════════════
+const lvLabel=l=>l==='HIGH'?'고위험':l==='MED'?'중위험':'저위험';
+const Bdg=lv=>({...RISK[lv],border:`1px solid ${RISK[lv].bd}`,borderRadius:5,padding:'3px 9px',fontSize:11,fontWeight:600,display:'inline-block'});
+const S={
+  card: (m)=>({background:CD,border:`1px solid ${CB}`,borderRadius:m?12:10,padding:m?'16px':'18px 20px',marginBottom:12}),
+  inp:  (m)=>({background:SF,border:`1px solid ${CB}`,borderRadius:m?10:6,color:TX,padding:m?'14px 16px':'8px 12px',fontSize:m?16:13,width:'100%',boxSizing:'border-box',outline:'none',WebkitAppearance:'none'}),
+  btn:  (bg,m,full)=>({background:bg||CY,color:['#060f1e','#0b1829'].includes(bg)?TX:'#060f1e',border:'none',borderRadius:m?10:7,padding:m?'14px 20px':'9px 18px',fontSize:m?15:13,fontWeight:700,cursor:'pointer',display:'inline-flex',alignItems:'center',gap:6,WebkitTapHighlightColor:'transparent',width:full?'100%':'auto',justifyContent:full?'center':'flex-start'}),
+  ChartTip:({active,payload,label})=>{if(!active||!payload?.length)return null;return(<div style={{background:'#0f1f35',border:`1px solid ${CB}`,borderRadius:8,padding:'10px 14px',fontSize:12}}><div style={{color:CY,fontWeight:600,marginBottom:6}}>{label}</div>{payload.map(p=><div key={p.name} style={{color:p.color||TX,marginBottom:2}}>{p.name}: <strong>{p.value}</strong></div>)}</div>);},
+};
+ 
+// ══════════════════════════════════════════════════════════════
+//  MAIN APP
+// ══════════════════════════════════════════════════════════════
+export default function App() {
+  // ── Responsive ──
+  const [isMob, setIsMob] = useState(false);
+  useEffect(()=>{ const check=()=>setIsMob(window.innerWidth<768); check(); window.addEventListener('resize',check); return()=>window.removeEventListener('resize',check); },[]);
+  const M = isMob;
+ 
+  // ── Auth ──
+  const [user,    setUser]    = useState(null);
+  const [loginPw, setLoginPw] = useState('');
+  const [loginSel,setLoginSel]= useState(null);
+  const [loginErr,setLoginErr]= useState('');
+ 
+  const doLogin = () => {
+    if (!loginSel) { setLoginErr('계정을 선택해주세요.'); return; }
+    if (loginSel.pw !== loginPw) { setLoginErr('비밀번호가 올바르지 않습니다.'); return; }
+    setUser(loginSel);
+    setLoginPw(''); setLoginErr(''); setLoginSel(null);
+    setNav('dash');
+  };
+  const doLogout = () => { setUser(null); setNav('dash'); setShowMore(false); };
+ 
+  // ── Nav ──
+  const [nav,      setNav]      = useState('dash');
+  const [showMore, setShowMore] = useState(false);
+ 
+  const allowedNavs = user ? (ROLE_NAVS[user.role]||[]) : [];
+  const goNav = id => {
+    if (id==='more') { setShowMore(s=>!s); return; }
+    if (!allowedNavs.includes(id)) return;
+    setNav(id); setShowMore(false);
+  };
+ 
+  const MOB_PRIMARY = ['dash','rep','vol','spi','more'].filter(id=>id==='more'||allowedNavs.includes(id));
+  const DESK_NAVS   = ALL_NAVS.filter(n=>allowedNavs.includes(n.id));
+  const MOB_MORE    = ALL_NAVS.filter(n=>allowedNavs.includes(n.id)&&!['dash','rep','vol','spi'].includes(n.id));
+ 
+  // ── Hazard state ──
+  const [hz,  setHz]  = useState(SEED);
+  const [fd,  setFd]  = useState('전체');
+  const [flv, setFlv] = useState('전체');
+  const [fst, setFst] = useState('전체');
+  const [now, setNow] = useState(new Date().toLocaleString('ko-KR'));
+  useEffect(()=>{ const t=setInterval(()=>setNow(new Date().toLocaleString('ko-KR')),60000); return()=>clearInterval(t); },[]);
+ 
+  // ── Firebase ──
+  const [fbUrl,    setFbUrl]    = useState('');
+  const [fbInput,  setFbInput]  = useState('');
+  const [fbStatus, setFbStatus] = useState('disconnected');
+  const [fbHist,   setFbHist]   = useState(HIST_SEED);
+  const pollRef = useRef(null);
+  const fetchFb = useCallback(async(url)=>{ try{ const res=await fetch(`${url}/hazards.json`,{signal:AbortSignal.timeout(6000)}); const data=await res.json(); if(data&&typeof data==='object'){const rows=Object.values(data).filter(v=>v?.level&&v?.dept).map((v,i)=>({id:v.id||i+2000,ym:v.date?.slice(0,7)||'2025-05',dept:v.dept,level:v.level,date:v.date||'2025-05-01',type:v.type||'자발',title:v.title||'(제목없음)',status:v.status||'접수됨',mission:v.mission||'기타'}));if(rows.length)setFbHist(rows);setFbStatus('connected');}}catch(e){setFbStatus('error');} },[]);
+  const connectFb=()=>{ const url=fbInput.trim().replace(/\/+$/,''); if(!url)return; setFbUrl(url); setFbStatus('connecting'); fetchFb(url); pollRef.current=setInterval(()=>fetchFb(url),12000); };
+  useEffect(()=>()=>{ if(pollRef.current)clearInterval(pollRef.current); },[]);
+ 
+  // Derived
+  const allFilt  = hz.filter(h=>(fd==='전체'||h.dept===fd)&&(flv==='전체'||h.level===flv)&&(fst==='전체'||h.status===fst));
+  const highCount= hz.filter(h=>h.level==='HIGH').length;
+  const aiCount  = hz.filter(h=>h.type==='AI').length;
+  const pendCount= hz.filter(h=>['접수됨','검토중','부서장승인대기'].includes(h.status)).length;
+  const myReps   = user ? hz.filter(h=>h.submittedBy===user.name) : [];
+ 
+  // ── Approval Workflow ──
+  const [approvalModal, setApprovalModal] = useState(null); // {hz, action}
+  const [approvalComment, setApprovalComment] = useState('');
+  const [approvalLoading, setApprovalLoading] = useState(false);
+ 
+  const executeApproval = async () => {
+    if (!approvalModal || !user) return;
+    setApprovalLoading(true);
+    await new Promise(r=>setTimeout(r,600)); // simulate async
+    const {hz:targetHz, action} = approvalModal;
+    const histEntry = { action:action.to, by:user.name, at:new Date().toLocaleString('ko-KR'), comment:approvalComment };
+    setHz(p=>p.map(h=>h.id===targetHz.id ? { ...h, status:action.to, approvalHistory:[...(h.approvalHistory||[]),histEntry] } : h));
+    setApprovalModal(null); setApprovalComment(''); setApprovalLoading(false);
+  };
+ 
+  // ── AI Hazard ──
+  const [aiF,setAiF]=useState({dept:'운항',mission:'산불방제',title:'',desc:''});
+  const [aiR,setAiR]=useState(null);
+  const [aiL,setAiL]=useState(false);
+  const [aiE,setAiE]=useState('');
+  const runAI=useCallback(async()=>{ if(!aiF.title.trim()||!aiF.desc.trim()){setAiE('제목과 내용을 입력하세요.');return;} setAiL(true);setAiR(null);setAiE(''); try{ const res=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:'claude-sonnet-4-20250514',max_tokens:1000,system:SYS,messages:[{role:'user',content:`부문:${aiF.dept}/임무:${aiF.mission}\n제목:${aiF.title}\n상세:${aiF.desc}`}]})}); const data=await res.json(); setAiR(JSON.parse(data.content?.map(c=>c.text||'').join('').replace(/```json|```/g,'').trim())); }catch(e){setAiE('분석 오류. 잠시 후 다시 시도해주세요.');} setAiL(false); },[aiF]);
+  const registerAI=()=>{ if(!aiR||!user)return; const newH={id:Date.now(),dept:aiF.dept,type:'AI',level:aiR.riskLevel,title:aiF.title,status:'접수됨',date:new Date().toISOString().slice(0,10),mission:aiF.mission,submittedBy:'AI 시스템',submittedByRole:'시스템',approvalHistory:[{action:'접수됨',by:'AI 시스템',at:new Date().toLocaleString('ko-KR'),comment:'AI 자동 분석'}]}; setHz(p=>[newH,...p]); setFbHist(p=>[...p,{...newH,ym:newH.date.slice(0,7)}]); setAiF({dept:'운항',mission:'산불방제',title:'',desc:''}); setAiR(null); alert('위험요인 현황에 등록되었습니다.'); };
+ 
+  // ── SPI ──
+  const [spiList,   setSpiList]   = useState(SPI_LIST_INIT);
+  const [spiSel,    setSpiSel]    = useState(null);
+  const [spiAiRes,  setSpiAiRes]  = useState({});
+  const [spiAiLoad, setSpiAiLoad] = useState({});
+  const [spiFilter, setSpiFilter] = useState('전체');
+  const [spiEditId, setSpiEditId] = useState(null);
+  const [spiNewVal, setSpiNewVal] = useState('');
+  const runSpiAI=useCallback(async(spi)=>{ const sid=spi.id; setSpiAiLoad(p=>({...p,[sid]:true})); const latest=spi.values[spi.values.length-1]; const status=getSpiStatus(spi,latest); const prompt=`SPI:${spi.name}\n부문:${spi.dept}\n목표:${spi.spt}${spi.unit} 이상임계:${spi.alert}${spi.unit}\n현재:${latest}${spi.unit} →${SPI_STATUS[status].label}\n추이:${SPI_MONTHS.map((m,i)=>`${m}:${spi.values[i]}${spi.unit}`).join(',')}`;  try{ const res=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:'claude-sonnet-4-20250514',max_tokens:1200,system:SPI_SYS,messages:[{role:'user',content:prompt}]})}); const data=await res.json(); setSpiAiRes(p=>({...p,[sid]:JSON.parse(data.content?.map(c=>c.text||'').join('').replace(/```json|```/g,'').trim())})); }catch(e){setSpiAiRes(p=>({...p,[sid]:{error:'분석 오류'}}));} setSpiAiLoad(p=>({...p,[sid]:false})); },[]);
+  const updateSpiVal=(id)=>{ const v=parseFloat(spiNewVal); if(isNaN(v))return; setSpiList(p=>p.map(s=>{if(s.id!==id)return s;const nv=[...s.values];nv[nv.length-1]=v;return{...s,values:nv};})); setSpiAiRes(p=>{const n={...p};delete n[id];return n;}); setSpiEditId(null); setSpiNewVal(''); };
+ 
+  // ── KPI ──
+  const [kpiTab,  setKpiTab]  = useState('chart');
+  const [kpiMonth,setKpiMonth]= useState('2025-05');
+  const [kpiDept, setKpiDept] = useState('전체');
+  const [kpiR,    setKpiR]    = useState(null);
+  const [kpiLoad, setKpiLoad] = useState(false);
+  const [kpiErr,  setKpiErr]  = useState('');
+  const runKpiReport=useCallback(async()=>{ setKpiLoad(true);setKpiR(null);setKpiErr(''); const deptRows=hz.filter(h=>kpiDept==='전체'||h.dept===kpiDept); const spiForDept=spiList.filter(s=>s.dept==='전 부문'||kpiDept==='전체'||s.dept===kpiDept); const spiSum=spiForDept.map(s=>{const v=s.values[s.values.length-1];const st=getSpiStatus(s,v);const sc=normSpi(s);return`${s.name}:${v}${s.unit}(목표${s.spt}${s.unit})→${SPI_STATUS[st].label} ${sc}%`;}).join('\n'); try{ const res=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:'claude-sonnet-4-20250514',max_tokens:1500,system:KPI_SYS,messages:[{role:'user',content:`기간:${KPI_ML(kpiMonth)}\n부문:${kpiDept}\nSPI:\n${spiSum}\n위험요인:고위험${deptRows.filter(h=>h.level==='HIGH').length}건 중위험${deptRows.filter(h=>h.level==='MED').length}건 저위험${deptRows.filter(h=>h.level==='LOW').length}건`}]})}); const data=await res.json(); setKpiR(JSON.parse(data.content?.map(c=>c.text||'').join('').replace(/```json|```/g,'').trim())); }catch(e){setKpiErr('오류. 잠시 후 다시 시도해주세요.');} setKpiLoad(false); },[kpiMonth,kpiDept,hz,spiList]);
+ 
+  // ── Report forms ──
+  const [rF,setRF]=useState({dept:user?.dept||'운항',mission:'산불방제',title:'',desc:'',loc:'',level:'MED',anon:false,rep:''});
+  const [rOk,setROk]=useState(false);
+  const [vF,setVF]=useState({dept:user?.dept||'운항',cat:'안전개선 제안',title:'',desc:'',anon:false,rep:''});
+  const [vOk,setVOk]=useState(false);
+  const [nF,setNF]=useState({nominee:'',dept:'운항',reason:'',nom:''});
+  const [nOk,setNOk]=useState(false);
+  const [noms,setNoms]=useState([
+    {id:1,nominee:"김현장",dept:"운항",reason:"산불방제 임무 중 급변풍 조기 경보 발령, 사고 위험 사전 차단에 기여",nom:"최안전",date:"2025-05-10"},
+    {id:2,nominee:"이정비",dept:"정비",reason:"정기점검 중 메인로터 피로균열 사전 발견 및 즉각 보고로 중대 사고 예방",nom:"정팀장",date:"2025-05-08"},
+  ]);
+ 
+  const submitRep=()=>{ if(!rF.title.trim()||!user)return; const id=Date.now(); const initHistory=[{action:'접수됨',by:rF.anon?'익명':user.name,at:new Date().toLocaleString('ko-KR'),comment:''}]; const newH={id,dept:rF.dept,type:'자발',level:rF.level,title:rF.title,status:'접수됨',date:new Date().toISOString().slice(0,10),mission:rF.mission,submittedBy:rF.anon?'익명':user.name,submittedByRole:user.role,approvalHistory:initHistory}; setHz(p=>[newH,...p]); setFbHist(p=>[...p,{...newH,ym:newH.date.slice(0,7)}]); setROk(true); setTimeout(()=>{setROk(false);setRF({dept:user?.dept||'운항',mission:'산불방제',title:'',desc:'',loc:'',level:'MED',anon:false,rep:''});},5000); };
+  const submitVol=()=>{ if(!vF.title.trim())return; setVOk(true); setTimeout(()=>{setVOk(false);setVF({dept:user?.dept||'운항',cat:'안전개선 제안',title:'',desc:'',anon:false,rep:''});},4000); };
+  const submitNom=()=>{ if(!nF.nominee.trim()||!nF.reason.trim())return; setNoms(p=>[{id:Date.now(),...nF,date:new Date().toISOString().slice(0,10)},...p]); setNOk(true); setTimeout(()=>{setNOk(false);setNF({nominee:'',dept:'운항',reason:'',nom:''});},3000); };
+ 
+  // ══════════════════════════════════════════════════════════════
+  //  LOGIN SCREEN
+  // ══════════════════════════════════════════════════════════════
+  if (!user) {
+    const byRole = role => DEMO_USERS.filter(u=>u.role===role);
+    return (
+      <div style={{minHeight:'100vh',background:BG,display:'flex',alignItems:'center',justifyContent:'center',padding:M?'16px':'20px'}}>
+        <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/dist/tabler-icons.min.css"/>
+        <div style={{width:'100%',maxWidth:480}}>
+          {/* Logo */}
+          <div style={{textAlign:'center',marginBottom:32}}>
+            <div style={{width:64,height:64,background:'linear-gradient(135deg,#1a6fc4,#38bdf8)',borderRadius:18,display:'flex',alignItems:'center',justifyContent:'center',margin:'0 auto 14px'}}>
+              <i className="ti ti-helicopter" style={{color:'#fff',fontSize:32}}/>
+            </div>
+            <div style={{fontSize:22,fontWeight:800,color:TX,letterSpacing:'2px'}}>BLUE AIR</div>
+            <div style={{fontSize:13,color:MT,marginTop:4}}>SMS 안전위험관리 포털</div>
+          </div>
+ 
+          <div style={{background:CD,border:`1px solid ${CB}`,borderRadius:16,padding:M?'20px 18px':'28px 32px'}}>
+            <div style={{fontSize:15,fontWeight:700,color:TX,marginBottom:4}}>계정 선택</div>
+            <div style={{fontSize:12,color:MT,marginBottom:20}}>역할에 맞는 계정을 선택하고 비밀번호를 입력하세요.</div>
+ 
+            {/* Role groups */}
+            {Object.entries({경영진:'경영진',안전관리자:'안전관리자',일반직원:'일반직원'}).map(([roleKey,roleLabel])=>(
+              <div key={roleKey} style={{marginBottom:16}}>
+                <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:8}}>
+                  <i className={`ti ${ROLES[roleLabel].icon}`} style={{color:ROLES[roleLabel].color,fontSize:14}}/>
+                  <span style={{fontSize:12,fontWeight:600,color:ROLES[roleLabel].color}}>{roleLabel}</span>
+                </div>
+                <div style={{display:'grid',gridTemplateColumns:M?'repeat(2,1fr)':'repeat(3,1fr)',gap:8}}>
+                  {byRole(roleLabel).map(u=>(
+                    <div key={u.id}
+                      style={{padding:'10px 12px',borderRadius:10,cursor:'pointer',border:`2px solid ${loginSel?.id===u.id?ROLES[roleLabel].color:CB}`,background:loginSel?.id===u.id?ROLES[roleLabel].badge:SF,transition:'all 0.15s',WebkitTapHighlightColor:'transparent'}}
+                      onClick={()=>{setLoginSel(u);setLoginPw('');setLoginErr('');}}>
+                      <div style={{fontSize:M?18:16,marginBottom:4}}>{u.avatar}</div>
+                      <div style={{fontSize:13,fontWeight:600,color:loginSel?.id===u.id?TX:TX}}>{u.name}</div>
+                      <div style={{fontSize:10,color:MT}}>{u.dept!=='전체'?u.dept:'전 부문'}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+ 
+            {/* Password */}
+            {loginSel&&(
+              <div style={{marginTop:16,padding:'16px',background:SF,borderRadius:10,border:`1px solid ${CB}`}}>
+                <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:12}}>
+                  <div style={{fontSize:20}}>{loginSel.avatar}</div>
+                  <div>
+                    <div style={{fontSize:13,fontWeight:600,color:TX}}>{loginSel.name}</div>
+                    <div style={{fontSize:11,color:ROLES[loginSel.role].color}}>{loginSel.role} · {loginSel.dept!=='전체'?loginSel.dept:'전 부문'}</div>
+                  </div>
+                </div>
+                <input style={{...S.inp(M),marginBottom:10}}
+                  type="password" placeholder="비밀번호 입력 (데모: 일반직원 1234 / 안전관리자 admin / 경영진 boss)"
+                  value={loginPw} onChange={e=>setLoginPw(e.target.value)}
+                  onKeyDown={e=>e.key==='Enter'&&doLogin()}/>
+                {loginErr&&<div style={{color:RD,fontSize:12,marginBottom:8}}><i className="ti ti-alert-circle" style={{marginRight:4}}/>{loginErr}</div>}
+                <button style={{...S.btn(ROLES[loginSel.role].color,M,true)}} onClick={doLogin}>
+                  <i className="ti ti-login" style={{marginRight:6}}/>로그인
+                </button>
+              </div>
+            )}
+ 
+            <div style={{marginTop:16,padding:'10px 12px',background:'rgba(56,189,248,0.06)',borderRadius:8,border:`1px solid rgba(56,189,248,0.15)`,fontSize:11,color:MT,lineHeight:1.7}}>
+              <strong style={{color:CY}}>데모 비밀번호</strong> — 일반직원: <code style={{color:CY}}>1234</code> · 안전관리자: <code style={{color:OR}}>admin</code> · 경영진: <code style={{color:PU}}>boss</code>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+ 
+  // ══════════════════════════════════════════════════════════════
+  //  APPROVAL MODAL
+  // ══════════════════════════════════════════════════════════════
+  const ApprovalModal = () => {
+    if (!approvalModal) return null;
+    const {hz:targetHz, action} = approvalModal;
+    const ac = WF_STATUS[action.to];
+    return (
+      <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.7)',zIndex:999,display:'flex',alignItems:'center',justifyContent:'center',padding:M?'16px':'0'}} onClick={e=>e.target===e.currentTarget&&setApprovalModal(null)}>
+        <div style={{background:'#0a1628',border:`1px solid ${ac.bd}`,borderRadius:14,width:M?'100%':480,padding:M?'20px 18px':'24px 28px',boxShadow:'0 24px 60px rgba(0,0,0,0.6)'}}>
+          {/* Header */}
+          <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:16}}>
+            <div style={{width:36,height:36,borderRadius:9,background:ac.bg,border:`1px solid ${ac.bd}`,display:'flex',alignItems:'center',justifyContent:'center'}}>
+              <i className={`ti ${action.icon}`} style={{color:ac.color,fontSize:18}}/>
+            </div>
+            <div>
+              <div style={{fontSize:15,fontWeight:700,color:TX}}>{action.label}</div>
+              <div style={{fontSize:12,color:MT}}>상태: {targetHz.status} → <span style={{color:ac.color,fontWeight:600}}>{action.to}</span></div>
+            </div>
+            <button style={{marginLeft:'auto',background:'none',border:'none',color:MT,cursor:'pointer',fontSize:20,padding:'4px'}} onClick={()=>setApprovalModal(null)}>✕</button>
+          </div>
+          {/* Hazard summary */}
+          <div style={{background:SF,borderRadius:8,padding:'12px 14px',marginBottom:14,border:`1px solid ${CB}`}}>
+            <div style={{display:'flex',gap:7,alignItems:'center',marginBottom:6}}>
+              <span style={Bdg(targetHz.level)}>{lvLabel(targetHz.level)}</span>
+              <span style={{fontSize:11,color:DM[targetHz.dept]?.c||MT}}>{targetHz.dept}</span>
+              <span style={{fontSize:11,color:MT,marginLeft:'auto'}}>{targetHz.date}</span>
+            </div>
+            <div style={{fontSize:13,color:TX,lineHeight:1.5}}>{targetHz.title}</div>
+            <div style={{fontSize:11,color:MT,marginTop:4}}>보고자: {targetHz.submittedBy}</div>
+          </div>
+          {/* Comment */}
+          <div style={{marginBottom:16}}>
+            <label style={{fontSize:12,color:MT,display:'block',marginBottom:6}}>
+              {action.to==='반려'?'반려 사유 *':'검토 의견 (선택)'}
+            </label>
+            <textarea style={{...S.inp(M),height:M?80:72,resize:'vertical'}}
+              placeholder={action.to==='반려'?'반려 사유를 명확히 기술해주세요':'검토 의견 또는 조치 지시사항을 입력하세요 (선택)'}
+              value={approvalComment} onChange={e=>setApprovalComment(e.target.value)}/>
+          </div>
+          {/* Actions */}
+          <div style={{display:'flex',gap:10}}>
+            <button style={{...S.btn(ac.color,M,false),flex:1,justifyContent:'center'}} onClick={executeApproval} disabled={approvalLoading||(action.to==='반려'&&!approvalComment.trim())}>
+              {approvalLoading?<><i className="ti ti-loader" style={{marginRight:5}}/>처리 중...</>:<><i className={`ti ${action.icon}`} style={{marginRight:5}}/>{action.label}</>}
+            </button>
+            <button style={{...S.btn(SF,M,false),border:`1px solid ${CB}`,color:MT}} onClick={()=>setApprovalModal(null)}>취소</button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+ 
+  // ══════════════════════════════════════════════════════════════
+  //  SECTION RENDERERS
+  // ══════════════════════════════════════════════════════════════
+  const C  = (extra={}) => ({...S.card(M), ...extra});
+  const inp= () => S.inp(M);
+  const sel= () => S.inp(M);
+  const btn= (bg,full) => S.btn(bg,M,full);
+ 
+  // ── DASHBOARD ──
+  const renderDash = () => {
+    const wfCounts = Object.keys(WF_STATUS).map(k=>({label:k, val:hz.filter(h=>h.status===k).length, c:WF_STATUS[k].color})).filter(w=>w.val>0);
+    const deptStats= DEPTS.map(d=>{const dh=hz.filter(h=>h.dept===d);return{dept:d,total:dh.length,H:dh.filter(h=>h.level==='HIGH').length,M:dh.filter(h=>h.level==='MED').length,L:dh.filter(h=>h.level==='LOW').length};});
+    const recentHigh=hz.filter(h=>h.level==='HIGH').slice(0,M?4:5);
+    const monthlyRisk=buildMonthlyRisk(fbHist);
+    const deptTrend=buildDeptTrend(fbHist);
+    return (
+      <div>
+        {/* KPI */}
+        <div style={{fontSize:11,color:MT,marginBottom:10}}>{now} 기준</div>
+        <div style={{display:'grid',gridTemplateColumns:'repeat(2,1fr)',gap:10,marginBottom:12}}>
+          {[{icon:'ti-clipboard-list',label:'전체',val:hz.length,c:CY},{icon:'ti-alert-triangle',label:'고위험',val:highCount,c:RD},{icon:'ti-cpu',label:'AI 감지',val:aiCount,c:PU},{icon:'ti-clock',label:'처리 대기',val:pendCount,c:AM}].map(k=>(
+            <div key={k.label} style={{...C(),textAlign:'center',padding:M?'14px 10px':'16px',marginBottom:0}}>
+              <i className={`ti ${k.icon}`} style={{fontSize:M?20:22,color:k.c,display:'block',marginBottom:4}}/>
+              <div style={{fontSize:M?22:26,fontWeight:700,color:k.c}}>{k.val}</div>
+              <div style={{fontSize:11,color:MT}}>{k.label}</div>
+            </div>
+          ))}
+        </div>
+ 
+        {/* Workflow status */}
+        {CAN(user,'approve')&&wfCounts.length>0&&(
+          <div style={C({})}>
+            <div style={{fontSize:13,fontWeight:600,color:TX,marginBottom:10}}><i className="ti ti-git-branch" style={{marginRight:6,color:CY}}/>워크플로우 현황</div>
+            <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+              {wfCounts.map(w=>(
+                <div key={w.label} style={{display:'flex',alignItems:'center',gap:6,padding:'6px 12px',background:`${w.c}18`,border:`1px solid ${w.c}44`,borderRadius:20,cursor:'pointer'}} onClick={()=>{setFst(w.label);goNav('reg');}}>
+                  <i className={`ti ${WF_STATUS[w.label].icon}`} style={{color:w.c,fontSize:13}}/>
+                  <span style={{fontSize:12,color:w.c,fontWeight:600}}>{w.label}</span>
+                  <span style={{fontSize:13,fontWeight:700,color:w.c}}>{w.val}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+ 
+        {/* Dept status */}
+        <div style={C({})}>
+          <div style={{fontSize:13,fontWeight:600,color:TX,marginBottom:10}}><i className="ti ti-layout-grid" style={{marginRight:6,color:CY}}/>부문별 현황</div>
+          {deptStats.map(d=>(
+            <div key={d.dept} style={{display:'flex',alignItems:'center',gap:10,padding:M?'12px':'9px 10px',background:SF,borderRadius:8,marginBottom:8,cursor:'pointer',border:`1px solid ${CB}`,minHeight:M?52:0}} onClick={()=>{setFd(d.dept);goNav('reg');}}>
+              <i className={`ti ${DM[d.dept]?.icon}`} style={{color:DM[d.dept]?.c,fontSize:16}}/>
+              <span style={{fontSize:M?14:13,color:TX,flex:1}}>{d.dept}</span>
+              {d.H>0&&<span style={{...RISK.HIGH,border:`1px solid ${RISK.HIGH.bd}`,borderRadius:4,padding:'2px 6px',fontSize:11,fontWeight:600}}>H:{d.H}</span>}
+              {d.M>0&&<span style={{...RISK.MED,border:`1px solid ${RISK.MED.bd}`,borderRadius:4,padding:'2px 6px',fontSize:11,fontWeight:600}}>M:{d.M}</span>}
+              {d.L>0&&<span style={{...RISK.LOW,border:`1px solid ${RISK.LOW.bd}`,borderRadius:4,padding:'2px 6px',fontSize:11,fontWeight:600}}>L:{d.L}</span>}
+              <i className="ti ti-chevron-right" style={{color:MT,fontSize:12}}/>
+            </div>
+          ))}
+        </div>
+ 
+        {/* Recent HIGH */}
+        <div style={C({})}>
+          <div style={{fontSize:13,fontWeight:600,color:TX,marginBottom:10}}><i className="ti ti-alert-octagon" style={{marginRight:6,color:RD}}/>최근 고위험</div>
+          {recentHigh.map(h=>(
+            <div key={h.id} style={{padding:M?'12px 0':'9px 0',borderBottom:`1px solid ${CB}`}}>
+              <div style={{display:'flex',gap:7,alignItems:'center',marginBottom:4}}>
+                <span style={Bdg(h.level)}>{lvLabel(h.level)}</span>
+                {h.type==='AI'&&<span style={{background:'rgba(167,139,250,0.15)',color:PU,border:'1px solid rgba(167,139,250,0.3)',borderRadius:4,padding:'2px 6px',fontSize:10}}>AI</span>}
+                <span style={{fontSize:11,color:WF_STATUS[h.status]?.color||MT,background:WF_STATUS[h.status]?.bg,border:`1px solid ${WF_STATUS[h.status]?.bd||CB}`,borderRadius:4,padding:'2px 7px',fontWeight:600,marginLeft:'auto'}}>{h.status}</span>
+              </div>
+              <div style={{fontSize:M?14:13,color:TX}}>{h.title}</div>
+              <div style={{fontSize:11,color:MT,marginTop:3}}>{h.dept} · {h.date} · {h.submittedBy}</div>
+            </div>
+          ))}
+        </div>
+ 
+        {/* Charts - desktop full / mobile scroll */}
+        {CAN(user,'viewAll')&&(
+          <div style={{overflowX:M?'auto':'visible',WebkitOverflowScrolling:'touch'}}>
+            <div style={{minWidth:M?480:'auto'}}>
+              <div style={C({})}>
+                <div style={{fontSize:13,fontWeight:600,color:TX,marginBottom:10}}><i className="ti ti-chart-bar" style={{marginRight:6,color:RD}}/>월별 위험도 분포</div>
+                <ResponsiveContainer width="100%" height={160}>
+                  <BarChart data={monthlyRisk} barSize={12} margin={{top:0,right:4,left:-20,bottom:0}}>
+                    <CartesianGrid strokeDasharray="3 3" stroke={CB} vertical={false}/>
+                    <XAxis dataKey="month" tick={{fill:MT,fontSize:10}} axisLine={{stroke:CB}} tickLine={false}/>
+                    <YAxis tick={{fill:MT,fontSize:10}} axisLine={false} tickLine={false} allowDecimals={false}/>
+                    <Tooltip content={<S.ChartTip/>}/>
+                    <Legend iconType="circle" iconSize={7} wrapperStyle={{fontSize:11,color:MT}}/>
+                    <Bar dataKey="HIGH" name="고위험" stackId="a" fill={RD}/><Bar dataKey="MED" name="중위험" stackId="a" fill={AM}/><Bar dataKey="LOW" name="저위험" stackId="a" fill={GR} radius={[3,3,0,0]}/>
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+ 
+  // ── MY REPORTS (일반직원 전용) ──
+  const renderMyRep = () => (
+    <div>
+      <div style={{marginBottom:16}}>
+        <div style={{fontSize:M?18:20,fontWeight:700,color:TX}}><i className="ti ti-my-location" style={{marginRight:8,color:CY}}/>내 보고 현황</div>
+        <div style={{fontSize:12,color:MT,marginTop:3}}>내가 제출한 위험요인 보고 및 처리 상태를 확인합니다.</div>
+      </div>
+      {myReps.length===0
+        ?<div style={{...C(),textAlign:'center',padding:48}}><i className="ti ti-clipboard" style={{fontSize:32,color:MT,display:'block',marginBottom:8}}/><div style={{color:MT}}>아직 제출한 보고가 없습니다.</div><button style={{...btn(CY,false),marginTop:12}} onClick={()=>goNav('rep')}><i className="ti ti-plus" style={{marginRight:4}}/>위험요인 보고</button></div>
+        :<div>
+          <div style={{display:'grid',gridTemplateColumns:'repeat(2,1fr)',gap:10,marginBottom:12}}>
+            {[{label:'전체',val:myReps.length,c:CY},{label:'처리 중',val:myReps.filter(h=>['접수됨','검토중','부서장승인대기'].includes(h.status)).length,c:AM},{label:'완료',val:myReps.filter(h=>h.status==='완료').length,c:GR},{label:'반려',val:myReps.filter(h=>h.status==='반려').length,c:RD}].map(k=>(
+              <div key={k.label} style={{...C(),textAlign:'center',padding:'12px',marginBottom:0}}><div style={{fontSize:20,fontWeight:700,color:k.c}}>{k.val}</div><div style={{fontSize:11,color:MT}}>{k.label}</div></div>
+            ))}
+          </div>
+          {myReps.map(h=>(
+            <div key={h.id} style={{...C(),marginBottom:10}}>
+              <div style={{display:'flex',gap:7,alignItems:'center',marginBottom:8}}>
+                <span style={Bdg(h.level)}>{lvLabel(h.level)}</span>
+                <span style={{fontSize:11,color:DM[h.dept]?.c||MT}}>{h.dept}</span>
+                <span style={{fontSize:11,color:WF_STATUS[h.status]?.color||MT,background:WF_STATUS[h.status]?.bg,border:`1px solid ${WF_STATUS[h.status]?.bd||CB}`,borderRadius:4,padding:'2px 8px',fontWeight:600,marginLeft:'auto'}}>{h.status}</span>
+              </div>
+              <div style={{fontSize:M?14:13,color:TX,marginBottom:6}}>{h.title}</div>
+              <div style={{fontSize:11,color:MT,marginBottom:10}}>{h.date} · {h.mission}</div>
+              {/* Timeline */}
+              {h.approvalHistory?.length>0&&(
+                <div style={{borderTop:`1px solid ${CB}`,paddingTop:10}}>
+                  <div style={{fontSize:11,fontWeight:600,color:MT,marginBottom:8}}>처리 이력</div>
+                  <div style={{position:'relative',paddingLeft:20}}>
+                    <div style={{position:'absolute',left:6,top:0,bottom:0,width:1,background:CB}}/>
+                    {h.approvalHistory.map((ev,i)=>{
+                      const wf=WF_STATUS[ev.action];
+                      return(
+                        <div key={i} style={{position:'relative',marginBottom:8,paddingBottom:8}}>
+                          <div style={{position:'absolute',left:-17,top:2,width:10,height:10,borderRadius:'50%',background:wf?.color||MT,border:`2px solid ${BG}`}}/>
+                          <div style={{display:'flex',alignItems:'center',gap:6,flexWrap:'wrap'}}>
+                            <span style={{fontSize:11,fontWeight:600,color:wf?.color||MT}}>{ev.action}</span>
+                            <span style={{fontSize:10,color:MT}}>· {ev.by}</span>
+                            <span style={{fontSize:10,color:MT,marginLeft:'auto'}}>{ev.at}</span>
+                          </div>
+                          {ev.comment&&<div style={{fontSize:11,color:MT,marginTop:2,lineHeight:1.5}}>{ev.comment}</div>}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      }
+    </div>
+  );
+ 
+  // ── REGISTRY with Approval workflow ──
+  const renderReg = () => {
+    const WF_KEYS = Object.keys(WF_STATUS);
+    const filtered = allFilt.filter(h=> CAN(user,'viewAll') || h.submittedBy===user?.name);
+    const pendingApproval = hz.filter(h=>['접수됨','검토중','부서장승인대기'].includes(h.status));
+    return (
+      <div>
+        <div style={{marginBottom:16}}>
+          <div style={{fontSize:M?18:20,fontWeight:700,color:TX}}><i className="ti ti-list-details" style={{marginRight:8,color:CY}}/>위험요인 현황</div>
+          <div style={{fontSize:12,color:MT,marginTop:3}}>
+            {CAN(user,'approve')?'전체 위험요인 조회 · 승인 워크플로우 관리':'내 보고 및 전체 현황 조회'}
+          </div>
+        </div>
+ 
+        {/* Pending approval banner — 안전관리자만 */}
+        {CAN(user,'approve')&&pendingApproval.length>0&&(
+          <div style={{...C(),background:'rgba(251,191,36,0.06)',border:`1px solid rgba(251,191,36,0.25)`}}>
+            <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:8}}>
+              <div style={{width:7,height:7,borderRadius:'50%',background:AM,boxShadow:`0 0 8px ${AM}`}}/>
+              <span style={{fontSize:13,fontWeight:600,color:AM}}>처리 대기 {pendingApproval.length}건</span>
+            </div>
+            <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+              {['접수됨','검토중','부서장승인대기'].map(st=>{const cnt=hz.filter(h=>h.status===st).length;return cnt>0&&(
+                <button key={st} style={{...S.btn(`${WF_STATUS[st].color}22`,false,false),border:`1px solid ${WF_STATUS[st].bd}`,color:WF_STATUS[st].color,padding:'6px 12px',fontSize:12}} onClick={()=>setFst(st)}>
+                  <i className={`ti ${WF_STATUS[st].icon}`} style={{marginRight:4}}/>{st} {cnt}건
+                </button>
+              );})}
+            </div>
+          </div>
+        )}
+ 
+        {/* Filters */}
+        <div style={{...C(),display:'flex',gap:M?8:10,flexWrap:'wrap',alignItems:'center',padding:'12px 14px'}}>
+          <select style={{...sel(),flex:M?1:'auto',minWidth:M?0:90,fontSize:12,padding:'7px 10px'}} value={fd} onChange={e=>setFd(e.target.value)}><option>전체</option>{DEPTS.map(d=><option key={d}>{d}</option>)}</select>
+          <select style={{...sel(),flex:M?1:'auto',minWidth:M?0:90,fontSize:12,padding:'7px 10px'}} value={flv} onChange={e=>setFlv(e.target.value)}>{[['전체','전체'],['HIGH','고위험'],['MED','중위험'],['LOW','저위험']].map(([v,l])=><option key={v} value={v}>{l}</option>)}</select>
+          <select style={{...sel(),flex:M?1:'auto',minWidth:M?0:100,fontSize:12,padding:'7px 10px'}} value={fst} onChange={e=>setFst(e.target.value)}><option value="전체">전체 상태</option>{WF_KEYS.map(k=><option key={k}>{k}</option>)}</select>
+          <span style={{fontSize:12,color:MT,fontWeight:600,flexShrink:0}}>{filtered.length}건</span>
+          <button style={{...S.btn(SF,false,false),border:`1px solid ${CB}`,color:MT,padding:'7px 10px',fontSize:12}} onClick={()=>{setFd('전체');setFlv('전체');setFst('전체');}}><i className="ti ti-refresh"/></button>
+        </div>
+ 
+        {/* List */}
+        {filtered.map(h=>{
+          const wf=WF_STATUS[h.status];
+          const availActions=WF_ACTIONS.filter(a=>a.from===h.status);
+          const canAct=CAN(user,'approve')&&availActions.length>0;
+          return(
+            <div key={h.id} style={{...C(),border:`1px solid ${wf?.bd||CB}`}}>
+              {/* Header row */}
+              <div style={{display:'flex',gap:8,alignItems:'flex-start',marginBottom:8,flexWrap:M?'wrap':'nowrap'}}>
+                <div style={{display:'flex',gap:7,alignItems:'center',flex:1,flexWrap:'wrap'}}>
+                  <span style={Bdg(h.level)}>{lvLabel(h.level)}</span>
+                  {h.type==='AI'&&<span style={{background:'rgba(167,139,250,0.15)',color:PU,border:'1px solid rgba(167,139,250,0.3)',borderRadius:4,padding:'2px 6px',fontSize:10}}>AI</span>}
+                  <span style={{fontSize:11,color:DM[h.dept]?.c||MT}}>{h.dept}</span>
+                </div>
+                <span style={{fontSize:11,color:wf?.color||MT,background:wf?.bg,border:`1px solid ${wf?.bd||CB}`,borderRadius:5,padding:'3px 10px',fontWeight:600,flexShrink:0,display:'flex',alignItems:'center',gap:4}}>
+                  <i className={`ti ${wf?.icon||'ti-circle'}`} style={{fontSize:12}}/>{h.status}
+                </span>
+              </div>
+              <div style={{fontSize:M?14:13,color:TX,marginBottom:6,lineHeight:1.4}}>{h.title}</div>
+              <div style={{fontSize:11,color:MT,marginBottom:10}}>{h.date} · {h.mission} · 보고자: {h.submittedBy}</div>
+ 
+              {/* Approval history */}
+              {h.approvalHistory?.length>0&&(
+                <div style={{background:SF,borderRadius:8,padding:'10px 12px',marginBottom:12}}>
+                  <div style={{fontSize:11,fontWeight:600,color:MT,marginBottom:8}}>처리 이력</div>
+                  <div style={{position:'relative',paddingLeft:18}}>
+                    <div style={{position:'absolute',left:5,top:0,bottom:0,width:1,background:CB}}/>
+                    {h.approvalHistory.map((ev,i)=>{
+                      const ec=WF_STATUS[ev.action];
+                      return(
+                        <div key={i} style={{position:'relative',marginBottom:i<h.approvalHistory.length-1?8:0}}>
+                          <div style={{position:'absolute',left:-16,top:3,width:8,height:8,borderRadius:'50%',background:ec?.color||MT,border:`2px solid ${BG}`}}/>
+                          <div style={{display:'flex',flexWrap:'wrap',gap:4,alignItems:'center'}}>
+                            <span style={{fontSize:11,fontWeight:600,color:ec?.color||MT}}>{ev.action}</span>
+                            <span style={{fontSize:10,color:MT}}>· {ev.by} · {ev.at}</span>
+                          </div>
+                          {ev.comment&&<div style={{fontSize:11,color:MT,marginTop:2,lineHeight:1.5,fontStyle:'italic'}}>"{ev.comment}"</div>}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+ 
+              {/* Action buttons — 안전관리자 전용 */}
+              {canAct&&(
+                <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+                  {availActions.map(action=>(
+                    <button key={action.to}
+                      style={{...S.btn(`${WF_STATUS[action.to].color}22`,M,false),border:`1px solid ${WF_STATUS[action.to].bd}`,color:WF_STATUS[action.to].color,padding:M?'10px 14px':'7px 14px',fontSize:M?13:12}}
+                      onClick={()=>{setApprovalModal({hz:h,action});setApprovalComment('');}}>
+                      <i className={`ti ${action.icon}`} style={{marginRight:4}}/>{action.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
+        {filtered.length===0&&<div style={{...C(),textAlign:'center',padding:40}}><i className="ti ti-database-off" style={{fontSize:28,color:MT,display:'block',marginBottom:8}}/><div style={{color:MT}}>해당하는 위험요인이 없습니다</div></div>}
+      </div>
+    );
+  };
+ 
+  // ── REPORT FORM ──
+  const renderRep = () => (
+    <div>
+      <div style={{marginBottom:16}}>
+        <div style={{fontSize:M?18:20,fontWeight:700,color:TX}}><i className="ti ti-clipboard-list" style={{marginRight:8,color:CY}}/>위험요인 보고</div>
+        <div style={{fontSize:12,color:MT,marginTop:3}}>관찰된 위험요인을 즉시 보고하세요.</div>
+      </div>
+      <div style={{...C(),background:'rgba(248,113,113,0.04)',border:`1px solid rgba(248,113,113,0.2)`}}>
+        <div style={{display:'flex',gap:8}}><i className="ti ti-shield" style={{color:RD,fontSize:16,marginTop:1}}/><div style={{fontSize:11,color:MT,lineHeight:1.6}}><strong style={{color:RD}}>Just Culture</strong> — 항공안전법 제61조. 보고 내용은 안전 개선 목적으로만 활용됩니다. 처리 현황은 "내 보고 현황"에서 실시간 확인 가능합니다.</div></div>
+      </div>
+      {rOk?<div style={{...C(),textAlign:'center',padding:M?48:36}}>
+          <i className="ti ti-circle-check" style={{fontSize:M?52:44,color:GR,display:'block',marginBottom:10}}/>
+          <div style={{fontSize:M?17:15,color:GR,fontWeight:700}}>보고가 접수되었습니다</div>
+          <div style={{fontSize:12,color:MT,marginTop:6}}>안전관리팀에서 검토합니다. 처리 현황은 "내 보고 현황"에서 확인하세요.</div>
+          <button style={{...btn(CY,false),marginTop:14}} onClick={()=>goNav('myrep')}><i className="ti ti-my-location" style={{marginRight:4}}/>내 보고 현황 확인</button>
+        </div>
+      :<div style={C({})}>
+          <div style={{display:'grid',gridTemplateColumns:M?'1fr':'1fr 1fr',gap:12,marginBottom:M?14:10}}>
+            <div><label style={{fontSize:12,color:MT,display:'block',marginBottom:6}}>부문 *</label><select style={inp()} value={rF.dept} onChange={e=>setRF(p=>({...p,dept:e.target.value}))}>{DEPTS.map(d=><option key={d}>{d}</option>)}</select></div>
+            <div><label style={{fontSize:12,color:MT,display:'block',marginBottom:6}}>임무 유형</label><select style={inp()} value={rF.mission} onChange={e=>setRF(p=>({...p,mission:e.target.value}))}>{MISSIONS.map(m=><option key={m}>{m}</option>)}</select></div>
+          </div>
+          <div style={{marginBottom:M?14:10}}><label style={{fontSize:12,color:MT,display:'block',marginBottom:6}}>위험요인 제목 *</label><input style={inp()} placeholder="간략한 위험요인 제목" value={rF.title} onChange={e=>setRF(p=>({...p,title:e.target.value}))}/></div>
+          <div style={{marginBottom:M?14:10}}><label style={{fontSize:12,color:MT,display:'block',marginBottom:6}}>상세 내용</label><textarea style={{...inp(),height:M?90:80,resize:'vertical'}} placeholder="발생 상황, 장소, 관련 인원 등을 구체적으로 기술해주세요" value={rF.desc} onChange={e=>setRF(p=>({...p,desc:e.target.value}))}/></div>
+          <div style={{display:'grid',gridTemplateColumns:M?'1fr':'1fr 1fr',gap:12,marginBottom:M?14:10}}>
+            <div><label style={{fontSize:12,color:MT,display:'block',marginBottom:6}}>발생 위치</label><input style={inp()} placeholder="예: 2번 헬기장, 정비동" value={rF.loc} onChange={e=>setRF(p=>({...p,loc:e.target.value}))}/></div>
+            <div><label style={{fontSize:12,color:MT,display:'block',marginBottom:6}}>위험 수준</label><select style={inp()} value={rF.level} onChange={e=>setRF(p=>({...p,level:e.target.value}))}><option value="HIGH">🔴 고위험</option><option value="MED">🟡 중위험</option><option value="LOW">🟢 저위험</option></select></div>
+          </div>
+          <div style={{marginBottom:M?20:14}}>
+            <label style={{fontSize:12,color:MT,display:'block',marginBottom:6}}>보고자</label>
+            <input style={{...inp(),marginBottom:10}} value={rF.anon?'':user?.name||''} disabled placeholder={rF.anon?'익명으로 접수됩니다':user?.name||''}/>
+            <label style={{display:'flex',alignItems:'center',gap:10,cursor:'pointer',padding:M?'12px 14px':'8px 12px',background:SF,borderRadius:8,border:`1px solid ${CB}`}}>
+              <input type="checkbox" checked={rF.anon} onChange={e=>setRF(p=>({...p,anon:e.target.checked}))} style={{width:M?20:16,height:M?20:16}}/>
+              <span style={{fontSize:M?14:12,color:MT}}>익명으로 보고</span>
+            </label>
+          </div>
+          <button style={{...btn(RD,true)}} onClick={submitRep}><i className="ti ti-send" style={{marginRight:6}}/>위험요인 보고 제출</button>
+        </div>
+      }
+    </div>
+  );
+ 
+  // ── VOLUNTARY FORM ──
+  const renderVol = () => (
+    <div>
+      <div style={{marginBottom:16}}>
+        <div style={{fontSize:M?18:20,fontWeight:700,color:TX}}><i className="ti ti-hand-finger" style={{marginRight:8,color:GR}}/>자발적 안전보고</div>
+        <div style={{fontSize:12,color:MT,marginTop:3}}>안전 개선 제안, 아차사고, 우수사례를 보고해주세요.</div>
+      </div>
+      <div style={{...C(),background:'rgba(52,211,153,0.04)',border:`1px solid rgba(52,211,153,0.2)`}}>
+        <div style={{display:'flex',gap:8}}><i className="ti ti-shield" style={{color:GR,fontSize:16}}/><div style={{fontSize:11,color:MT,lineHeight:1.6}}><strong style={{color:GR}}>Just Culture 보호</strong> — 자발적 보고는 항공안전법 제61조에 의해 보호됩니다.</div></div>
+      </div>
+      {vOk?<div style={{...C(),textAlign:'center',padding:M?48:36}}><i className="ti ti-circle-check" style={{fontSize:M?52:44,color:GR,display:'block',marginBottom:10}}/><div style={{fontSize:M?17:15,color:GR,fontWeight:700}}>소중한 보고 감사합니다</div></div>
+      :<div style={C({})}>
+          <div style={{display:'grid',gridTemplateColumns:M?'1fr':'1fr 1fr',gap:12,marginBottom:M?14:10}}>
+            <div><label style={{fontSize:12,color:MT,display:'block',marginBottom:6}}>부문</label><select style={inp()} value={vF.dept} onChange={e=>setVF(p=>({...p,dept:e.target.value}))}>{DEPTS.map(d=><option key={d}>{d}</option>)}</select></div>
+            <div><label style={{fontSize:12,color:MT,display:'block',marginBottom:6}}>보고 유형</label><select style={inp()} value={vF.cat} onChange={e=>setVF(p=>({...p,cat:e.target.value}))}>{VOL_CATS.map(c=><option key={c}>{c}</option>)}</select></div>
+          </div>
+          <div style={{marginBottom:M?14:10}}><label style={{fontSize:12,color:MT,display:'block',marginBottom:6}}>제목 *</label><input style={inp()} placeholder="보고 내용을 간략히" value={vF.title} onChange={e=>setVF(p=>({...p,title:e.target.value}))}/></div>
+          <div style={{marginBottom:M?14:10}}><label style={{fontSize:12,color:MT,display:'block',marginBottom:6}}>상세 내용</label><textarea style={{...inp(),height:M?90:80,resize:'vertical'}} placeholder="구체적인 상황, 제안 내용 등을 자유롭게 작성해주세요" value={vF.desc} onChange={e=>setVF(p=>({...p,desc:e.target.value}))}/></div>
+          <div style={{marginBottom:M?20:14}}>
+            <label style={{fontSize:12,color:MT,display:'block',marginBottom:6}}>보고자</label>
+            <input style={{...inp(),marginBottom:10}} value={vF.anon?'':user?.name||''} disabled/>
+            <label style={{display:'flex',alignItems:'center',gap:10,cursor:'pointer',padding:M?'12px 14px':'8px 12px',background:SF,borderRadius:8,border:`1px solid ${CB}`}}>
+              <input type="checkbox" checked={vF.anon} onChange={e=>setVF(p=>({...p,anon:e.target.checked}))} style={{width:M?20:16,height:M?20:16}}/>
+              <span style={{fontSize:M?14:12,color:MT}}>익명 보고</span>
+            </label>
+          </div>
+          <button style={{...btn(GR,true)}} onClick={submitVol}><i className="ti ti-send" style={{marginRight:6}}/>안전보고 제출</button>
+        </div>
+      }
+    </div>
+  );
+ 
+  // ── NOMINATIONS ──
+  const renderNom = () => (
+    <div>
+      <div style={{marginBottom:16}}><div style={{fontSize:M?18:20,fontWeight:700,color:TX}}><i className="ti ti-award" style={{marginRight:8,color:AM}}/>모범직원 추천</div></div>
+      {nOk?<div style={{...C(),textAlign:'center',padding:M?48:36}}><i className="ti ti-award" style={{fontSize:M?48:40,color:AM,display:'block',marginBottom:8}}/><div style={{fontSize:M?16:14,color:AM,fontWeight:700}}>추천이 접수되었습니다</div></div>
+        :<div style={C({})}>
+          <div style={{display:'grid',gridTemplateColumns:M?'1fr':'1fr 1fr',gap:12,marginBottom:M?14:10}}>
+            <div><label style={{fontSize:12,color:MT,display:'block',marginBottom:6}}>추천 대상자 *</label><input style={inp()} placeholder="성명" value={nF.nominee} onChange={e=>setNF(p=>({...p,nominee:e.target.value}))}/></div>
+            <div><label style={{fontSize:12,color:MT,display:'block',marginBottom:6}}>소속 부문</label><select style={inp()} value={nF.dept} onChange={e=>setNF(p=>({...p,dept:e.target.value}))}>{DEPTS.map(d=><option key={d}>{d}</option>)}</select></div>
+          </div>
+          <div style={{marginBottom:M?14:10}}><label style={{fontSize:12,color:MT,display:'block',marginBottom:6}}>추천 사유 *</label><textarea style={{...inp(),height:M?90:78,resize:'vertical'}} placeholder="안전 문화 기여 내용을 구체적으로 작성" value={nF.reason} onChange={e=>setNF(p=>({...p,reason:e.target.value}))}/></div>
+          <div style={{marginBottom:M?20:14}}><label style={{fontSize:12,color:MT,display:'block',marginBottom:6}}>추천인</label><input style={inp()} value={user?.name||''} disabled/></div>
+          <button style={{...btn(AM,true)}} onClick={submitNom}><i className="ti ti-send" style={{marginRight:6}}/>추천 등록</button>
+        </div>
+      }
+      <div style={C({})}>
+        <div style={{fontSize:13,fontWeight:600,color:TX,marginBottom:10}}><i className="ti ti-star" style={{marginRight:6,color:AM}}/>추천 현황 ({noms.length}건)</div>
+        {noms.map(n=>(
+          <div key={n.id} style={{background:SF,borderRadius:8,padding:M?'14px':'12px',marginBottom:8,border:`1px solid ${CB}`}}>
+            <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:6}}>
+              <i className="ti ti-award" style={{color:AM,fontSize:15}}/>
+              <span style={{fontWeight:600,color:TX,fontSize:M?14:13}}>{n.nominee}</span>
+              <span style={{background:`${DM[n.dept]?.c}22`,color:DM[n.dept]?.c,border:`1px solid ${DM[n.dept]?.c}44`,borderRadius:4,padding:'1px 7px',fontSize:11}}>{n.dept}</span>
+              <span style={{marginLeft:'auto',fontSize:11,color:MT}}>{n.date}</span>
+            </div>
+            <div style={{fontSize:M?13:12,color:TX,lineHeight:1.6}}>{n.reason}</div>
+            <div style={{fontSize:11,color:MT,marginTop:4}}>추천인: {n.nom}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+ 
+  // ── SPI (simplified) ──
+  const renderSPI = () => {
+    const filteredSpis=spiFilter==='전체'?spiList:spiList.filter(s=>getSpiStatus(s,s.values[s.values.length-1])===spiFilter);
+    const alertCnt=spiList.filter(s=>getSpiStatus(s,s.values[s.values.length-1])==='ALERT').length;
+    const warnCnt=spiList.filter(s=>getSpiStatus(s,s.values[s.values.length-1])==='WARNING').length;
+    return(
+      <div>
+        <div style={{marginBottom:16}}><div style={{fontSize:M?18:20,fontWeight:700,color:TX}}><i className="ti ti-chart-arrows-vertical" style={{marginRight:8,color:AM}}/>SPI 모니터링</div></div>
+        <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:10,marginBottom:12}}>
+          {[{k:'ALERT',l:'이상',v:alertCnt,c:RD},{k:'WARNING',l:'주의',v:warnCnt,c:AM},{k:'NORMAL',l:'정상',v:spiList.length-alertCnt-warnCnt,c:GR}].map(x=>(
+            <div key={x.k} style={{...C(),marginBottom:0,textAlign:'center',padding:'12px 8px',cursor:'pointer',border:spiFilter===x.k?`1px solid ${x.c}66`:`1px solid ${CB}`}} onClick={()=>setSpiFilter(f=>f===x.k?'전체':x.k)}>
+              <div style={{fontSize:22,fontWeight:700,color:x.c}}>{x.v}</div><div style={{fontSize:11,color:MT}}>{x.l}</div>
+            </div>
+          ))}
+        </div>
+        {filteredSpis.map(spi=>{
+          const latest=spi.values[spi.values.length-1]; const prev=spi.values[spi.values.length-2];
+          const status=getSpiStatus(spi,latest); const st=SPI_STATUS[status];
+          const isOpen=spiSel===spi.id; const aiRes=spiAiRes[spi.id]; const aiLoad=spiAiLoad[spi.id];
+          const score=normSpi(spi);
+          const chartData=SPI_MONTHS.map((m,i)=>({month:m,값:spi.values[i]}));
+          return(
+            <div key={spi.id} style={{...C(),padding:0,overflow:'hidden',border:status==='ALERT'?`1px solid ${RISK.HIGH.bd}`:status==='WARNING'?`1px solid ${RISK.MED.bd}`:`1px solid ${CB}`}}>
+              <div style={{display:'flex',alignItems:'center',gap:M?12:10,padding:M?'16px':'14px 16px',cursor:'pointer'}} onClick={()=>setSpiSel(isOpen?null:spi.id)}>
+                <div style={{width:8,height:8,borderRadius:'50%',background:st.color,flexShrink:0,boxShadow:status!=='NORMAL'?`0 0 6px ${st.color}`:'none'}}/>
+                <i className={`ti ${spi.icon}`} style={{fontSize:16,color:st.color,flexShrink:0}}/>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontSize:M?14:13,fontWeight:600,color:TX}}>{spi.name}</div>
+                  <div style={{fontSize:11,color:MT}}>{spi.dept}</div>
+                </div>
+                <div style={{textAlign:'right',minWidth:M?70:60}}>
+                  <div style={{fontSize:M?19:18,fontWeight:700,color:st.color}}>{latest}<span style={{fontSize:10,color:MT,marginLeft:2}}>{spi.unit}</span></div>
+                  <div style={{fontSize:10,color:MT}}>달성 {score}%</div>
+                </div>
+                <span style={{...st,border:`1px solid ${st.bd}`,borderRadius:5,padding:'3px 8px',fontSize:11,fontWeight:600,flexShrink:0}}>{st.label}</span>
+                <i className={`ti ${isOpen?'ti-chevron-up':'ti-chevron-down'}`} style={{color:MT,fontSize:13,flexShrink:0}}/>
+              </div>
+              {isOpen&&(
+                <div style={{borderTop:`1px solid ${CB}`,padding:M?'16px':'14px 16px',background:SF}}>
+                  <div style={{marginBottom:12}}>
+                    <div style={{fontSize:11,color:MT,marginBottom:6}}>SPT:{spi.spt}{spi.unit} 이상임계:{spi.alert}{spi.unit}</div>
+                    <ResponsiveContainer width="100%" height={M?120:130}>
+                      <LineChart data={chartData} margin={{top:4,right:8,left:-18,bottom:0}}>
+                        <CartesianGrid strokeDasharray="3 3" stroke={CB} vertical={false}/>
+                        <XAxis dataKey="month" tick={{fill:MT,fontSize:10}} axisLine={{stroke:CB}} tickLine={false}/>
+                        <YAxis tick={{fill:MT,fontSize:10}} axisLine={false} tickLine={false}/>
+                        <Tooltip content={<S.ChartTip/>}/>
+                        <ReferenceLine y={spi.spt} stroke={GR} strokeDasharray="4 2" strokeWidth={1.5}/>
+                        <ReferenceLine y={spi.alert} stroke={RD} strokeDasharray="4 2" strokeWidth={1.5}/>
+                        <Line type="monotone" dataKey="값" stroke={st.color} strokeWidth={2} dot={{r:3,fill:st.color}} activeDot={{r:5}}/>
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </div>
+                  {spiEditId===spi.id
+                    ?<div style={{display:'flex',gap:8,marginBottom:12}}><input style={{...S.inp(false),width:90,padding:'6px 8px',fontSize:12}} type="number" value={spiNewVal} onChange={e=>setSpiNewVal(e.target.value)}/><button style={{...S.btn(GR,false,false),padding:'6px 12px',fontSize:12}} onClick={()=>updateSpiVal(spi.id)}>저장</button><button style={{...S.btn(SF,false,false),border:`1px solid ${CB}`,color:MT,padding:'6px 10px',fontSize:12}} onClick={()=>{setSpiEditId(null);setSpiNewVal('');}}>취소</button></div>
+                    :<button style={{...S.btn(SF,false,false),border:`1px solid ${CB}`,color:MT,padding:'6px 12px',fontSize:12,marginBottom:12}} onClick={()=>{setSpiEditId(spi.id);setSpiNewVal(String(latest));}}><i className="ti ti-edit" style={{marginRight:4}}/>값 수동 입력</button>
+                  }
+                  {!aiRes&&<button style={{...S.btn(status==='ALERT'?RD:status==='WARNING'?AM:PU,M,true)}} onClick={()=>runSpiAI(spi)} disabled={aiLoad}>
+                    {aiLoad?<><i className="ti ti-loader" style={{marginRight:5}}/>분석 중...</>:<><i className="ti ti-sparkles" style={{marginRight:5}}/>AI 원인 분석 자동 생성</>}
+                  </button>}
+                  {aiRes&&!aiRes.error&&(
+                    <div style={{marginTop:12}}>
+                      <div style={{fontSize:13,fontWeight:700,color:TX,marginBottom:8}}><i className="ti ti-sparkles" style={{color:PU,marginRight:5}}/>AI 분석 결과</div>
+                      <div style={{background:CD,borderRadius:8,padding:'10px 12px',marginBottom:8,borderLeft:`3px solid ${PU}`}}>
+                        <div style={{fontSize:11,color:PU,marginBottom:4,fontWeight:600}}>종합 분석</div>
+                        <div style={{fontSize:13,color:TX,lineHeight:1.65}}>{aiRes.summary}</div>
+                      </div>
+                      <div style={{display:'grid',gridTemplateColumns:M?'1fr':'repeat(2,1fr)',gap:8}}>
+                        {[{lbl:'근본 원인',items:aiRes.rootCauses,c:RD},{lbl:'즉각 조치',items:aiRes.immediateActions,c:AM}].map(sec=>(
+                          <div key={sec.lbl} style={{background:CD,borderRadius:7,padding:'10px 12px',borderLeft:`3px solid ${sec.c}`}}>
+                            <div style={{fontSize:11,color:sec.c,marginBottom:6,fontWeight:600}}>{sec.lbl}</div>
+                            {(sec.items||[]).slice(0,3).map((a,i)=><div key={i} style={{display:'flex',gap:5,marginBottom:4,fontSize:12,color:TX,lineHeight:1.4}}><span style={{background:sec.c,color:'#fff',borderRadius:'50%',width:14,height:14,display:'flex',alignItems:'center',justifyContent:'center',fontSize:8,flexShrink:0,marginTop:1,fontWeight:700}}>{i+1}</span>{a}</div>)}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
+ 
+  // ── AI ANALYSIS ──
+  const renderAI=()=>(<div><div style={{marginBottom:16}}><div style={{fontSize:M?18:20,fontWeight:700,color:TX}}><i className="ti ti-cpu" style={{marginRight:8,color:PU}}/>AI 위험요인 분석</div></div><div style={C({})}><div style={{display:'grid',gridTemplateColumns:M?'1fr':'1fr 1fr',gap:12,marginBottom:M?14:10}}><div><label style={{fontSize:12,color:MT,display:'block',marginBottom:6}}>부문</label><select style={inp()} value={aiF.dept} onChange={e=>setAiF(p=>({...p,dept:e.target.value}))}>{DEPTS.map(d=><option key={d}>{d}</option>)}</select></div><div><label style={{fontSize:12,color:MT,display:'block',marginBottom:6}}>임무</label><select style={inp()} value={aiF.mission} onChange={e=>setAiF(p=>({...p,mission:e.target.value}))}>{MISSIONS.map(m=><option key={m}>{m}</option>)}</select></div></div><div style={{marginBottom:M?14:10}}><label style={{fontSize:12,color:MT,display:'block',marginBottom:6}}>제목 *</label><input style={inp()} placeholder="위험요인 제목" value={aiF.title} onChange={e=>setAiF(p=>({...p,title:e.target.value}))}/></div><div style={{marginBottom:M?16:14}}><label style={{fontSize:12,color:MT,display:'block',marginBottom:6}}>상세 내용 *</label><textarea style={{...inp(),height:M?90:80,resize:'vertical'}} placeholder="발생 상황 상세히" value={aiF.desc} onChange={e=>setAiF(p=>({...p,desc:e.target.value}))}/></div>{aiE&&<div style={{color:RD,fontSize:12,marginBottom:10}}>{aiE}</div>}<button style={{...btn(PU,true)}} onClick={runAI} disabled={aiL}>{aiL?<><i className="ti ti-loader" style={{marginRight:5}}/>분석 중...</>:<><i className="ti ti-sparkles" style={{marginRight:5}}/>AI 위험요인 분석</>}</button></div>{aiR&&(<div style={{...C(),border:`1px solid ${RISK[aiR.riskLevel].bd}`}}><div style={{display:'flex',gap:8,flexWrap:'wrap',alignItems:'center',marginBottom:10}}><span style={{...Bdg(aiR.riskLevel),fontSize:13,padding:'5px 12px'}}>{lvLabel(aiR.riskLevel)}</span><div style={{background:'rgba(167,139,250,0.12)',border:'1px solid rgba(167,139,250,0.3)',borderRadius:6,padding:'4px 10px',fontSize:12,color:PU}}>{aiR.classification} 위험</div><div style={{fontSize:10,color:MT,background:SF,border:`1px solid ${CB}`,borderRadius:5,padding:'3px 8px'}}>HFACS: {aiR.hfacs}</div></div><div style={{background:SF,borderRadius:7,padding:'10px 12px',marginBottom:10,borderLeft:`3px solid ${CY}`}}><div style={{fontSize:11,color:CY,marginBottom:4,fontWeight:600}}>종합 분석</div><div style={{fontSize:13,color:TX,lineHeight:1.65}}>{aiR.summary}</div></div><div style={{display:'grid',gridTemplateColumns:M?'1fr':'1fr 1fr',gap:10,marginBottom:12}}>{[{lbl:'즉각 조치',items:aiR.immediateActions,c:RD},{lbl:'선제 대응',items:aiR.proactiveActions,c:GR}].map(s=><div key={s.lbl} style={{background:SF,borderRadius:7,padding:'10px 12px',borderLeft:`3px solid ${s.c}`}}><div style={{fontSize:11,color:s.c,marginBottom:6,fontWeight:600}}>{s.lbl}</div>{(s.items||[]).map((a,i)=><div key={i} style={{display:'flex',gap:5,marginBottom:4,fontSize:12,color:TX,lineHeight:1.4}}><span style={{background:s.c,color:'#fff',borderRadius:'50%',width:14,height:14,display:'flex',alignItems:'center',justifyContent:'center',fontSize:8,flexShrink:0,marginTop:1,fontWeight:700}}>{i+1}</span>{a}</div>)}</div>)}</div><button style={{...btn(GR,false)}} onClick={registerAI}><i className="ti ti-database-plus" style={{marginRight:4}}/>위험요인 현황 등록</button></div>)}</div>);
+ 
+  // ── KPI (경영진/안전관리자 전용) ──
+  const renderKPI=()=>{
+    const radarData=spiList.map(s=>({name:s.name.length>7?s.name.slice(0,7)+'…':s.name,fullName:s.name,달성률:normSpi(s),기준:100}));
+    const deptKpiData=DEPTS.map((d,i)=>{const rel=spiList.filter(s=>s.dept===d||s.dept==='전 부문');const avg=rel.length?Math.round(rel.reduce((a,s)=>a+normSpi(s),0)/rel.length):0;return{부문:d,달성률:avg,색상:DEPT_COLORS[i]};});
+    const avgScore=Math.round(radarData.reduce((a,r)=>a+r.달성률,0)/radarData.length);
+    const grade=kpiGrade(avgScore);
+    return(
+      <div>
+        <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:16}}>
+          <div style={{flex:1}}><div style={{fontSize:M?18:20,fontWeight:700,color:TX}}><i className="ti ti-report-analytics" style={{marginRight:8,color:AM}}/>KPI 리포트</div></div>
+          <div style={{display:'flex',borderRadius:8,overflow:'hidden',border:`1px solid ${CB}`}}>
+            {[['chart','SPI 차트'],['report','월간 리포트']].map(([id,lbl])=>(
+              <div key={id} style={{padding:M?'10px 14px':'7px 14px',cursor:'pointer',fontSize:12,fontWeight:kpiTab===id?600:400,background:kpiTab===id?'rgba(251,191,36,0.12)':SF,color:kpiTab===id?AM:MT,borderRight:id==='chart'?`1px solid ${CB}`:''}} onClick={()=>setKpiTab(id)}>{lbl}</div>
+            ))}
+          </div>
+        </div>
+        {kpiTab==='chart'&&(
+          <div>
+            <div style={{...C(),display:'flex',alignItems:'center',gap:16,background:'rgba(251,191,36,0.05)',border:`1px solid rgba(251,191,36,0.2)`}}>
+              <div style={{textAlign:'center',flexShrink:0}}><div style={{fontSize:M?40:48,fontWeight:800,color:grade.c,lineHeight:1}}>{grade.g}</div><div style={{fontSize:11,color:grade.c,fontWeight:600}}>{grade.lbl}</div></div>
+              <div style={{flex:1}}><div style={{fontSize:13,fontWeight:600,color:TX,marginBottom:6}}>전체 SPI 달성률 <span style={{fontSize:M?22:26,fontWeight:700,color:grade.c}}>{avgScore}</span><span style={{color:MT}}>%</span></div><div style={{height:6,background:SF,borderRadius:3,overflow:'hidden'}}><div style={{height:'100%',width:`${avgScore}%`,background:`linear-gradient(90deg,${avgScore<60?RD:avgScore<80?AM:GR},${grade.c})`,borderRadius:3}}/></div></div>
+            </div>
+            <div style={C({})}>
+              <div style={{fontSize:13,fontWeight:600,color:TX,marginBottom:4}}><i className="ti ti-chart-radar" style={{marginRight:6,color:AM}}/>ICAO SPI 달성률 레이더</div>
+              <ResponsiveContainer width="100%" height={M?200:230}>
+                <RadarChart data={radarData} margin={{top:10,right:20,bottom:10,left:20}}>
+                  <PolarGrid stroke={CB} strokeDasharray="3 3"/>
+                  <PolarAngleAxis dataKey="name" tick={{fill:MT,fontSize:M?9:10}}/>
+                  <PolarRadiusAxis angle={90} domain={[0,100]} tick={{fill:MT,fontSize:9}} tickCount={4}/>
+                  <Radar name="달성률" dataKey="달성률" stroke={CY} fill={CY} fillOpacity={0.18} strokeWidth={2}/>
+                  <Radar name="기준" dataKey="기준" stroke={`${GR}55`} fill="none" strokeDasharray="4 2" strokeWidth={1}/>
+                  <Tooltip content={({active,payload})=>{if(!active||!payload?.length)return null;const d=radarData.find(r=>r.name===payload[0]?.payload?.name);return(<div style={{background:'#0f1f35',border:`1px solid ${CB}`,borderRadius:8,padding:'8px 12px',fontSize:12}}><div style={{color:CY,fontWeight:600}}>{d?.fullName||''}</div><div style={{color:TX}}>{payload[0]?.value}%</div></div>);}}/>
+                </RadarChart>
+              </ResponsiveContainer>
+            </div>
+            <div style={C({})}>
+              <div style={{fontSize:13,fontWeight:600,color:TX,marginBottom:10}}><i className="ti ti-chart-bar" style={{marginRight:6,color:CY}}/>부문별 KPI 달성률</div>
+              {deptKpiData.map(d=>{const g=kpiGrade(d.달성률);return(<div key={d.부문} style={{marginBottom:12}}><div style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}><i className={`ti ${DM[d.부문]?.icon}`} style={{color:d.색상,fontSize:14}}/><span style={{fontSize:13,color:TX,flex:1}}>{d.부문}</span><span style={{fontSize:18,fontWeight:700,color:g.c}}>{g.g}</span><span style={{fontSize:13,fontWeight:700,color:g.c}}>{d.달성률}%</span></div><div style={{height:6,background:SF,borderRadius:3,overflow:'hidden'}}><div style={{height:'100%',width:`${d.달성률}%`,background:`linear-gradient(90deg,${d.색상}88,${d.색상})`,borderRadius:3}}/></div></div>);})}
+            </div>
+          </div>
+        )}
+        {kpiTab==='report'&&(
+          <div>
+            <div style={C({})}>
+              <div style={{display:'grid',gridTemplateColumns:M?'1fr':'1fr 1fr auto',gap:12,alignItems:'end'}}>
+                <div><label style={{fontSize:12,color:MT,display:'block',marginBottom:6}}>분석 기간</label><select style={inp()} value={kpiMonth} onChange={e=>{setKpiMonth(e.target.value);setKpiR(null);}}>{KPI_MONTHS.map(m=><option key={m} value={m}>{KPI_ML(m)}</option>)}</select></div>
+                <div><label style={{fontSize:12,color:MT,display:'block',marginBottom:6}}>대상 부문</label><select style={inp()} value={kpiDept} onChange={e=>{setKpiDept(e.target.value);setKpiR(null);}}><option>전체</option>{DEPTS.map(d=><option key={d}>{d}</option>)}</select></div>
+                <button style={{...btn(AM,true),marginTop:M?4:0}} onClick={runKpiReport} disabled={kpiLoad}>{kpiLoad?<><i className="ti ti-loader" style={{marginRight:4}}/>생성 중...</>:<><i className="ti ti-sparkles" style={{marginRight:4}}/>AI 리포트 생성</>}</button>
+              </div>
+              {kpiErr&&<div style={{color:RD,fontSize:12,marginTop:8}}>{kpiErr}</div>}
+            </div>
+            {!kpiR&&!kpiLoad&&<div style={{...C(),textAlign:'center',padding:40,border:'1px dashed rgba(100,116,139,0.3)'}}><i className="ti ti-file-analytics" style={{fontSize:32,color:MT,display:'block',marginBottom:8}}/><div style={{color:MT}}>기간과 부문 선택 후 AI 리포트를 생성하세요.</div></div>}
+            {kpiR&&(
+              <div>
+                <div style={{...C(),background:'rgba(251,191,36,0.05)',border:'1px solid rgba(251,191,36,0.25)'}}>
+                  <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:12}}><div><div style={{fontSize:11,color:MT}}>{KPI_ML(kpiMonth)} · {kpiDept}</div><div style={{fontSize:M?16:15,fontWeight:700,color:TX}}>월간 SMS KPI 리포트</div></div><div style={{marginLeft:'auto',textAlign:'center'}}><div style={{fontSize:36,fontWeight:800,color:kpiGrade(kpiR.overall_score).c,lineHeight:1}}>{kpiR.grade}</div><div style={{fontSize:11,color:kpiGrade(kpiR.overall_score).c,fontWeight:600}}>{kpiGrade(kpiR.overall_score).lbl} · {kpiR.overall_score}점</div></div></div>
+                  <div style={{background:SF,borderRadius:7,padding:'10px 12px',borderLeft:`3px solid ${AM}`}}><div style={{fontSize:11,color:AM,marginBottom:4,fontWeight:600}}>경영진 요약</div><div style={{fontSize:13,color:TX,lineHeight:1.7}}>{kpiR.executive_summary}</div></div>
+                </div>
+                {kpiR.dept_analysis?.length>0&&<div style={{display:'grid',gridTemplateColumns:M?'1fr':'repeat(3,1fr)',gap:10,marginBottom:12}}>{kpiR.dept_analysis.map((d,i)=>{const g=kpiGrade(d.score);return(<div key={i} style={C({marginBottom:0})}><div style={{display:'flex',alignItems:'center',gap:8,marginBottom:6}}><i className={`ti ${DM[d.dept]?.icon||'ti-building'}`} style={{color:DEPT_COLORS[DEPTS.indexOf(d.dept)]||MT,fontSize:15}}/><span style={{fontSize:13,fontWeight:600,color:TX,flex:1}}>{d.dept}</span><span style={{fontSize:20,fontWeight:700,color:g.c}}>{g.g}</span></div><div style={{height:4,background:SF,borderRadius:2,overflow:'hidden',marginBottom:8}}><div style={{height:'100%',width:`${d.score}%`,background:g.c,borderRadius:2}}/></div>{d.highlights?.map((h,j)=><div key={j} style={{fontSize:11,color:MT,marginBottom:3,display:'flex',gap:4}}><i className="ti ti-point" style={{color:g.c,fontSize:9,marginTop:2}}/>{h}</div>)}{d.risk_note&&<div style={{fontSize:11,color:RD,marginTop:6,background:RISK.HIGH.bg,borderRadius:5,padding:'4px 8px',border:`1px solid ${RISK.HIGH.bd}`}}>{d.risk_note}</div>}</div>);})}</div>}
+                <div style={{display:'grid',gridTemplateColumns:M?'1fr':'1fr 1fr',gap:10}}>
+                  <div style={C({})}><div style={{fontSize:13,fontWeight:600,color:RD,marginBottom:8}}><i className="ti ti-alert-octagon" style={{marginRight:5}}/>주요 위험 요소</div>{kpiR.top_risks?.map((r,i)=><div key={i} style={{display:'flex',gap:6,marginBottom:6,fontSize:12,color:TX,lineHeight:1.5}}><span style={{background:RD,color:'#fff',borderRadius:'50%',width:15,height:15,display:'flex',alignItems:'center',justifyContent:'center',fontSize:8,flexShrink:0,marginTop:1,fontWeight:700}}>{i+1}</span>{r}</div>)}</div>
+                  <div style={C({})}><div style={{fontSize:13,fontWeight:600,color:GR,marginBottom:8}}><i className="ti ti-bulb" style={{marginRight:5}}/>권고 사항</div>{kpiR.recommendations?.map((r,i)=><div key={i} style={{display:'flex',gap:6,marginBottom:6,fontSize:12,color:TX,lineHeight:1.5}}><span style={{background:GR,color:'#0b1829',borderRadius:'50%',width:15,height:15,display:'flex',alignItems:'center',justifyContent:'center',fontSize:8,flexShrink:0,marginTop:1,fontWeight:700}}>{i+1}</span>{r}</div>)}</div>
+                </div>
+                <div style={{...C(),background:'rgba(56,189,248,0.05)',border:`1px solid rgba(56,189,248,0.2)`}}><div style={{fontSize:12,fontWeight:600,color:CY,marginBottom:6}}>다음 달 중점 관리</div><div style={{fontSize:13,color:TX,lineHeight:1.65,marginBottom:8}}>{kpiR.next_month_focus}</div><div style={{fontSize:11,color:MT}}>{kpiR.icao_reference}</div></div>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  };
+ 
+  const renderSection=()=>{ if(nav==='dash')return renderDash(); if(nav==='myrep')return renderMyRep(); if(nav==='rep')return renderRep(); if(nav==='vol')return renderVol(); if(nav==='nom')return renderNom(); if(nav==='reg')return renderReg(); if(nav==='spi')return renderSPI(); if(nav==='ai')return renderAI(); if(nav==='kpi')return renderKPI(); return renderDash(); };
+ 
+  const BOTTOM_H = 64;
+  const roleColor = ROLES[user?.role]?.color||CY;
+ 
+  return (
+    <div style={{minHeight:'100vh',background:BG,color:TX,fontFamily:'system-ui,-apple-system,sans-serif',display:'flex',flexDirection:'column'}}>
+      <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/dist/tabler-icons.min.css"/>
+      <style>{`*{box-sizing:border-box}input,select,textarea{-webkit-appearance:none}select{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2364748b' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 12px center;padding-right:32px!important}::-webkit-scrollbar{width:4px;height:4px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:#1e3a5f;border-radius:2px}`}</style>
+      <ApprovalModal/>
+ 
+      {/* ── Header ── */}
+      <div style={{background:SF,borderBottom:`1px solid ${CB}`,padding:`0 ${M?14:20}px`,height:M?52:54,display:'flex',alignItems:'center',justifyContent:'space-between',flexShrink:0,position:'sticky',top:0,zIndex:100}}>
+        <div style={{display:'flex',alignItems:'center',gap:10}}>
+          <div style={{width:M?30:34,height:M?30:34,background:'linear-gradient(135deg,#1a6fc4,#38bdf8)',borderRadius:8,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>
+            <i className="ti ti-helicopter" style={{color:'#fff',fontSize:M?14:17}}/>
+          </div>
+          {!M&&<div><div style={{fontSize:15,fontWeight:700,color:TX,letterSpacing:'1.5px'}}>BLUE AIR</div><div style={{fontSize:9,color:MT,textTransform:'uppercase',letterSpacing:'0.5px'}}>SMS 안전위험관리 포털</div></div>}
+          {M&&<div style={{fontSize:14,fontWeight:700,color:TX,letterSpacing:'0.5px'}}>BLUE AIR SMS</div>}
+        </div>
+        <div style={{display:'flex',gap:M?8:12,alignItems:'center'}}>
+          {/* User badge */}
+          <div style={{display:'flex',alignItems:'center',gap:6,background:`${roleColor}18`,border:`1px solid ${roleColor}44`,borderRadius:20,padding:M?'5px 10px':'4px 12px'}}>
+            <span style={{fontSize:M?14:12}}>{user.avatar}</span>
+            <span style={{fontSize:M?12:11,color:roleColor,fontWeight:600}}>{user.name}</span>
+            {!M&&<span style={{fontSize:10,color:MT}}>·{user.role}</span>}
+          </div>
+          <button style={{display:'flex',alignItems:'center',gap:4,background:SF,border:`1px solid ${CB}`,borderRadius:7,padding:M?'7px 10px':'5px 10px',cursor:'pointer',color:MT,fontSize:12,WebkitTapHighlightColor:'transparent'}} onClick={doLogout}>
+            <i className="ti ti-logout" style={{fontSize:M?16:14}}/>{!M&&'로그아웃'}
+          </button>
+        </div>
+      </div>
+ 
+      {/* ── Body ── */}
+      <div style={{display:'flex',flex:1,overflow:'hidden'}}>
+        {/* Desktop sidebar */}
+        {!M&&(
+          <div style={{width:192,background:SF,borderRight:`1px solid ${CB}`,padding:'14px 0',display:'flex',flexDirection:'column',flexShrink:0,overflowY:'auto'}}>
+            <div style={{padding:'0 14px 8px',fontSize:9,color:MT,textTransform:'uppercase',letterSpacing:'1px',fontWeight:600}}>메뉴</div>
+            {DESK_NAVS.map(item=>(
+              <div key={item.id} style={{display:'flex',alignItems:'center',gap:9,padding:'9px 14px',cursor:'pointer',background:nav===item.id?'rgba(56,189,248,0.08)':'transparent',borderLeft:nav===item.id?`3px solid ${CY}`:'3px solid transparent',color:nav===item.id?CY:MT,fontSize:13,transition:'all 0.12s'}} onClick={()=>setNav(item.id)}>
+                <i className={`ti ${item.icon}`} style={{fontSize:15}}/><span>{item.lbl}</span>
+                {item.id==='reg'&&pendCount>0&&<span style={{marginLeft:'auto',background:RISK.HIGH.bg,color:RISK.HIGH.color,border:`1px solid ${RISK.HIGH.bd}`,borderRadius:10,padding:'0 6px',fontSize:9,fontWeight:700}}>{pendCount}</span>}
+                {item.id==='myrep'&&myReps.filter(h=>['접수됨','검토중'].includes(h.status)).length>0&&<span style={{marginLeft:'auto',background:RISK.MED.bg,color:RISK.MED.color,border:`1px solid ${RISK.MED.bd}`,borderRadius:10,padding:'0 6px',fontSize:9,fontWeight:700}}>{myReps.filter(h=>['접수됨','검토중'].includes(h.status)).length}</span>}
+              </div>
+            ))}
+            <div style={{marginTop:'auto',padding:'14px 14px 0',borderTop:`1px solid ${CB}`,marginTop:12}}>
+              <div style={{display:'flex',alignItems:'center',gap:8,padding:'8px 0'}}>
+                <span style={{fontSize:18}}>{user.avatar}</span>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontSize:12,fontWeight:600,color:TX}}>{user.name}</div>
+                  <div style={{fontSize:10,color:roleColor}}>{user.role}{user.dept!=='전체'&&` · ${user.dept}`}</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+ 
+        {/* Main */}
+        <div style={{flex:1,overflowY:'auto',WebkitOverflowScrolling:'touch',padding:M?'14px 14px 80px':'22px 26px'}}>
+          {renderSection()}
+        </div>
+      </div>
+ 
+      {/* ── Mobile bottom nav ── */}
+      {M&&(
+        <div style={{position:'fixed',bottom:0,left:0,right:0,height:BOTTOM_H,background:SF,borderTop:`1px solid ${CB}`,display:'flex',zIndex:200,paddingBottom:'env(safe-area-inset-bottom)'}}>
+          {(['dash','rep','vol','spi'].filter(id=>allowedNavs.includes(id))).concat(['more']).map(id=>{
+            const navItem=ALL_NAVS.find(n=>n.id===id)||{id:'more',icon:'ti-menu-2',lbl:'더보기'};
+            const isActive=(id==='more'?showMore:nav===id)&&!(id!=='more'&&showMore);
+            const isRep=id==='rep';
+            const badge=id==='reg'?pendCount:id==='myrep'?myReps.filter(h=>['접수됨','검토중'].includes(h.status)).length:0;
+            return(
+              <div key={id} style={{flex:1,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',gap:3,cursor:'pointer',padding:'6px 4px',WebkitTapHighlightColor:'transparent',position:'relative'}} onClick={()=>goNav(id)}>
+                {isRep&&<div style={{position:'absolute',top:6,left:'50%',transform:'translateX(-50%)',width:42,height:42,background:RD,borderRadius:12,display:'flex',alignItems:'center',justifyContent:'center',boxShadow:`0 4px 12px ${RD}66`}}><i className="ti ti-alert-triangle" style={{fontSize:20,color:'#fff'}}/></div>}
+                {!isRep&&(
+                  <>
+                    <i className={`ti ${navItem.icon}`} style={{fontSize:22,color:isActive?CY:MT}}/>
+                    {badge>0&&<div style={{position:'absolute',top:6,right:'calc(50% - 16px)',width:16,height:16,background:RD,borderRadius:'50%',display:'flex',alignItems:'center',justifyContent:'center',fontSize:9,color:'#fff',fontWeight:700}}>{badge}</div>}
+                  </>
+                )}
+                <span style={{fontSize:10,color:isActive&&!isRep?CY:MT,fontWeight:isActive&&!isRep?600:400,marginTop:isRep?24:0}}>{isRep?'위험보고':navItem.lbl}</span>
+                {isActive&&!isRep&&<div style={{position:'absolute',top:0,left:'50%',transform:'translateX(-50%)',width:24,height:2,background:CY,borderRadius:1}}/>}
+              </div>
+            );
+          })}
+        </div>
+      )}
+ 
+      {/* ── More drawer ── */}
+      {M&&showMore&&(
+        <>
+          <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:150}} onClick={()=>setShowMore(false)}/>
+          <div style={{position:'fixed',bottom:BOTTOM_H,left:0,right:0,background:SF,borderTop:`1px solid ${CB}`,borderRadius:'16px 16px 0 0',zIndex:160,padding:'8px 0 10px'}}>
+            <div style={{width:40,height:4,background:CB,borderRadius:2,margin:'0 auto 12px'}}/>
+            {/* User info */}
+            <div style={{display:'flex',alignItems:'center',gap:10,padding:'10px 20px 14px',borderBottom:`1px solid ${CB}`}}>
+              <div style={{width:40,height:40,background:`${roleColor}22`,border:`1px solid ${roleColor}44`,borderRadius:12,display:'flex',alignItems:'center',justifyContent:'center',fontSize:20}}>{user.avatar}</div>
+              <div><div style={{fontSize:14,fontWeight:600,color:TX}}>{user.name}</div><div style={{fontSize:12,color:roleColor}}>{user.role}{user.dept!=='전체'&&` · ${user.dept}`}</div></div>
+              <button style={{marginLeft:'auto',background:'none',border:`1px solid ${CB}`,borderRadius:7,padding:'7px 12px',cursor:'pointer',color:MT,fontSize:12}} onClick={doLogout}><i className="ti ti-logout" style={{marginRight:4}}/>로그아웃</button>
+            </div>
+            {MOB_MORE.map(item=>(
+              <div key={item.id} style={{display:'flex',alignItems:'center',gap:14,padding:'14px 20px',cursor:'pointer',WebkitTapHighlightColor:'transparent'}} onClick={()=>goNav(item.id)}>
+                <div style={{width:40,height:40,background:'rgba(56,189,248,0.1)',borderRadius:10,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>
+                  <i className={`ti ${item.icon}`} style={{fontSize:20,color:CY}}/>
+                </div>
+                <span style={{fontSize:15,color:TX,fontWeight:500,flex:1}}>{item.lbl}</span>
+                {item.id==='reg'&&pendCount>0&&<span style={{background:RISK.HIGH.bg,color:RISK.HIGH.color,border:`1px solid ${RISK.HIGH.bd}`,borderRadius:12,padding:'2px 8px',fontSize:11,fontWeight:700}}>{pendCount}건</span>}
+                <i className="ti ti-chevron-right" style={{color:MT}}/>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+ 
